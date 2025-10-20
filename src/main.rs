@@ -41,7 +41,9 @@ struct Args {
     #[arg(short, long, help = "RAG context name")]
     context: Option<String>,
 
-    prompt: String,
+    // all remaining arguments as prompt
+    #[arg(trailing_var_arg = true)]
+    prompt: Vec<String>,
 }
 
 lazy_static! {
@@ -58,7 +60,7 @@ async fn main() -> Result<()> {
     trace!("main() -> Result<(), Box<dyn std::error::Error>>");
 
     let mut context: Option<&str> = None;
-    let prompt = args.prompt;
+    let prompt = args.prompt.join(" ");
     let mut capture = String::new();
     let regex_prompt = prompt.clone();
 
