@@ -46,7 +46,7 @@ impl SlmRequestBuilder {
         }
     }
 
-    pub fn template(&mut self, template: String) -> &mut Self {
+    pub fn _template(&mut self, template: String) -> &mut Self {
         self.template = Some(template);
         self
     }

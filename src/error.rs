@@ -11,6 +11,9 @@ pub enum AppError {
     #[error("Regex error: {0}")]
     Regex(#[from] regex::Error),
 
+    #[error("MongoDB error: {0}")]
+    Mongo(#[from] mongodb::error::Error),
+
     #[error("Unrecoverable error on {0}")]
     Fatal(String),
 }
