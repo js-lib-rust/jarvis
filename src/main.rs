@@ -69,7 +69,6 @@ impl Args {
 
 lazy_static! {
     pub static ref PATTERNS: Vec<(&'static str, &'static str)> = vec![(
-        //r"(?i)\b(?:def|define|what\s+is|what\s+.*mean\w*)\s+(?:of\s+)?(.+)\b",
         r"(?i)\b(?:def|define)\s+(?:of\s+)?(.+)\b",
         DictionaryAgent::ID
     )];
