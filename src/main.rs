@@ -46,9 +46,31 @@ struct Args {
     prompt: Vec<String>,
 }
 
+impl Args {
+    fn prompt(&self) -> String {
+        let mut prompt = String::new();
+        let mut iter = self.prompt.iter();
+
+        if let Some(first) = iter.next() {
+            if first.trim() != "," {
+                prompt.push_str(first);
+            }
+        }
+        for part in iter {
+            if !prompt.is_empty() {
+                prompt.push(' ');
+            }
+            prompt.push_str(part);
+        }
+
+        prompt
+    }
+}
+
 lazy_static! {
     pub static ref PATTERNS: Vec<(&'static str, &'static str)> = vec![(
-        r"(?i)\b(?:def|define|what\s+is|what\s+.*mean\w*)\s+(?:of\s+)?(.+)\b",
+        //r"(?i)\b(?:def|define|what\s+is|what\s+.*mean\w*)\s+(?:of\s+)?(.+)\b",
+        r"(?i)\b(?:def|define)\s+(?:of\s+)?(.+)\b",
         DictionaryAgent::ID
     )];
 }
@@ -60,7 +82,7 @@ async fn main() -> Result<()> {
     trace!("main() -> Result<(), Box<dyn std::error::Error>>");
 
     let mut context: Option<&str> = None;
-    let prompt = args.prompt.join(" ");
+    let prompt = args.prompt();
     let mut capture = String::new();
     let regex_prompt = prompt.clone();
 
