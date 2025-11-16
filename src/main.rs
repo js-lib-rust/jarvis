@@ -1,18 +1,19 @@
 mod agent;
+mod command;
 mod error;
 mod logger;
 mod slm;
 
 use crate::{
-    agent::{Agent, dictionary::DictionaryAgent, prompt::PromptAgent, rag::RagAgent},
+    agent::rag::RagAgent,
+    command::Command,
     error::Result,
-    slm::SlmRequest,
+    slm::{SlmClient, SlmRequest},
 };
 use clap::Parser;
+use futures::Stream;
 use futures_util::StreamExt;
-use lazy_static::lazy_static;
 use log::trace;
-use regex::Regex;
 use tokio::io::{self, AsyncWriteExt};
 
 #[derive(Parser, Debug)]
@@ -67,66 +68,57 @@ impl Args {
     }
 }
 
-lazy_static! {
-    pub static ref PATTERNS: Vec<(&'static str, &'static str)> = vec![(
-        r"(?i)\b(?:def|define)\s+(?:of\s+)?(.+)\b",
-        DictionaryAgent::ID
-    )];
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
     logger::init(&args.log_level, &args.log_file);
-    trace!("main() -> Result<(), Box<dyn std::error::Error>>");
+    trace!("main() -> Result<()>");
 
-    let mut context: Option<&str> = None;
     let prompt = args.prompt();
-    let mut capture = String::new();
-    let regex_prompt = prompt.clone();
+    if let Some(command) = prompt.parse::<Command>().ok() {
+        if let Some(response) = command.exec().await? {
+            println!("{response}");
+            return Ok(());
+        };
+    }
 
-    if args.context.is_none() && !args.force_slm {
-        for (pattern, agent_id) in PATTERNS.iter() {
-            let regex_instance = Regex::new(&pattern)?;
-            if regex_instance.is_match(&prompt) {
-                context = Some(agent_id);
-                if let Some(captures) = regex_instance.captures(&regex_prompt) {
-                    capture = captures[1].to_string();
-                    break;
-                };
+    let context = args.context.clone();
+    let mut request = SlmRequest::new(&prompt);
+    if let Some(system) = args.system {
+        request.set_system(&system);
+    }
+    if let Some(context) = args.context {
+        request.set_context(&context);
+    }
+
+    let processed = match context {
+        Some(_) => process(RagAgent::new().exec(&mut request).await).await,
+        None => false,
+    };
+
+    if !processed {
+        let request = SlmRequest::new(&prompt);
+        let _ = process(SlmClient::new().exec(&request).await).await;
+    }
+
+    Ok(())
+}
+
+fn process<S>(stream: S) -> impl Future<Output = bool>
+where
+    S: Stream<Item = Result<String>> + Unpin,
+{
+    stream.fold(false, |_, chunk| async move {
+        match chunk {
+            Ok(chunk) => {
+                print!("{}", chunk);
+                let _ = io::stdout().flush().await;
+                true
+            }
+            Err(error) => {
+                println!("fail to process stream chunk: {error}");
+                false
             }
         }
-    }
-    if context.is_none() {
-        context = args.context.as_deref();
-    }
-
-    let agent = match context {
-        Some(DictionaryAgent::ID) => Agent::Dictionary(DictionaryAgent::new()),
-        Some(_) => Agent::Rag(RagAgent::new()),
-        None => Agent::Prompt(PromptAgent::new()),
-    };
-    let context = match context {
-        Some(context) => context.to_string(),
-        None => String::new(),
-    };
-
-    let mut builder = SlmRequest::builder();
-    if let Some(system) = args.system {
-        builder.system(system);
-    }
-    builder.prompt(prompt);
-
-    let request = match agent {
-        Agent::Prompt(_) => builder.build(),
-        Agent::Rag(_) => builder.context(context).build(),
-        Agent::Dictionary(_) => builder.system(capture).build(),
-    };
-
-    let mut stream = agent.exec(request).await;
-    while let Some(chunk) = stream.next().await {
-        print!("{}", chunk?);
-        let _ = io::stdout().flush().await;
-    }
-    Ok(())
+    })
 }

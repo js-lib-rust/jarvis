@@ -14,9 +14,9 @@ impl RagAgent {
         Self {}
     }
 
-    pub async fn exec(&self, mut request: SlmRequest) -> AgentStream {
+    pub async fn exec(&self, request: &mut SlmRequest) -> AgentStream {
         trace!("RagAgent::exec(&self, mut request: SlmRequest) -> AgentStream");
-        request.set_system(Self::SYSTEM.to_string());
+        request.set_system(Self::SYSTEM);
         let slm = SlmClient::new();
         slm.exec(request).await
     }

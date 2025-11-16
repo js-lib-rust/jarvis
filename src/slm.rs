@@ -9,70 +9,26 @@ const SLM_URL: &str = "http://jarvis.local:1964/";
 
 #[derive(Serialize)]
 pub struct SlmRequest {
-    template: Option<String>,
+    prompt: String,
     system: Option<String>,
     context: Option<String>,
-    prompt: String,
 }
 
 impl SlmRequest {
-    pub fn builder() -> SlmRequestBuilder {
-        SlmRequestBuilder::new()
-    }
-
-    pub fn set_system(&mut self, system: String) {
-        self.system = Some(system);
-    }
-
-    pub fn get_system(&self) -> Option<String> {
-        self.system.clone()
-    }
-}
-
-pub struct SlmRequestBuilder {
-    template: Option<String>,
-    system: Option<String>,
-    context: Option<String>,
-    prompt: Option<String>,
-}
-
-impl SlmRequestBuilder {
-    pub fn new() -> Self {
+    pub fn new(prompt: &str) -> Self {
         Self {
-            template: None,
+            prompt: prompt.to_string(),
             system: None,
             context: None,
-            prompt: None,
         }
     }
 
-    pub fn _template(&mut self, template: String) -> &mut Self {
-        self.template = Some(template);
-        self
+    pub fn set_system(&mut self, system: &str) {
+        self.system = Some(system.to_string());
     }
 
-    pub fn system(&mut self, system: String) -> &mut Self {
-        self.system = Some(system);
-        self
-    }
-
-    pub fn context(&mut self, context: String) -> &mut Self {
-        self.context = Some(context);
-        self
-    }
-
-    pub fn prompt(&mut self, prompt: String) -> &mut Self {
-        self.prompt = Some(prompt);
-        self
-    }
-
-    pub fn build(&self) -> SlmRequest {
-        SlmRequest {
-            template: self.template.clone(),
-            system: self.system.clone(),
-            context: self.context.clone(),
-            prompt: self.prompt.clone().unwrap(),
-        }
+    pub fn set_context(&mut self, context: &str) {
+        self.context = Some(context.to_string());
     }
 }
 
@@ -87,7 +43,7 @@ impl SlmClient {
         Self { http_client }
     }
 
-    pub async fn exec(&self, request: SlmRequest) -> AgentStream {
+    pub async fn exec(&self, request: &SlmRequest) -> AgentStream {
         trace!("exec(&self, request: SlmRequest) -> SlmStream");
 
         let response = self
@@ -123,11 +79,11 @@ mod test {
 
     #[tokio::test]
     async fn prompt() {
-        let prompt = String::from("how to eprint to stdout on rust");
-        let request = SlmRequest::builder().prompt(prompt).build();
+        let prompt = "how to eprint to stdout on rust";
+        let request = SlmRequest::new(prompt);
 
         let slm_client = SlmClient::new();
-        let mut stream = slm_client.exec(request).await;
+        let mut stream = slm_client.exec(&request).await;
         while let Some(chunk) = stream.next().await {
             print!("{}", chunk.unwrap());
             io::stdout().flush().await.unwrap();
@@ -137,15 +93,13 @@ mod test {
 
     #[tokio::test]
     async fn query() {
-        let context = String::from("context");
-        let prompt = String::from("please list all acronyms");
-        let request = SlmRequest::builder()
-            .context(context)
-            .prompt(prompt)
-            .build();
+        let context = "context";
+        let prompt = "please list all acronyms";
+        let mut request = SlmRequest::new(prompt);
+        request.set_context(context);
 
         let slm_client = SlmClient::new();
-        let mut stream = slm_client.exec(request).await;
+        let mut stream = slm_client.exec(&request).await;
         while let Some(chunk) = stream.next().await {
             print!("{}", chunk.unwrap());
             io::stdout().flush().await.unwrap();

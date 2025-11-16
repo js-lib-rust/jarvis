@@ -5,6 +5,9 @@ pub enum AppError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
+    #[error("Parse command error")]
+    ParseCommandError,
+
     #[error("Reqwest error: {0}")]
     Reqwest(#[from] reqwest::Error),
 
