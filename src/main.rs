@@ -1,5 +1,6 @@
 mod agent;
 mod command;
+mod config;
 mod error;
 mod logger;
 mod slm;
@@ -13,7 +14,7 @@ use crate::{
 use clap::Parser;
 use futures::Stream;
 use futures_util::StreamExt;
-use log::trace;
+use log::{debug, trace};
 use tokio::io::{self, AsyncWriteExt};
 
 #[derive(Parser, Debug)]
@@ -33,7 +34,10 @@ struct Args {
     )]
     log_file: Option<String>,
 
-    #[arg(long, default_value = "false", help = "Force SLM")]
+    #[arg(long, default_value = "config.yml", help = "config file path")]
+    config_file: String,
+
+    #[arg(long, default_value = "false", help = "force SLM")]
     force_slm: bool,
 
     #[arg(short, long, help = "SLM system role")]
@@ -73,6 +77,10 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     logger::init(&args.log_level, &args.log_file);
     trace!("main() -> Result<()>");
+
+    config::init_config(&args.config_file)?;
+    let config = config::get_config();
+    debug!("config: {config:?}");
 
     let prompt = args.prompt();
     if let Some(command) = prompt.parse::<Command>().ok() {

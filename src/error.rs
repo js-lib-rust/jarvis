@@ -5,6 +5,12 @@ pub enum AppError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
+    #[error("Config error")]
+    ConfigError,
+
+    #[error("Serde YAML: {0}")]
+    Yaml(#[from] serde_yaml::Error),
+
     #[error("Parse command error")]
     ParseCommandError,
 

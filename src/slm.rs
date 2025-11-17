@@ -1,4 +1,4 @@
-use crate::{agent::AgentStream, error::AppError};
+use crate::{agent::AgentStream, config, error::AppError};
 use async_stream::stream;
 use futures::StreamExt;
 use log::{error, trace};
@@ -33,14 +33,24 @@ impl SlmRequest {
 }
 
 pub struct SlmClient {
+    slm_url: String,
     http_client: Client,
 }
 
 impl SlmClient {
     pub fn new() -> Self {
         trace!("SlmClient::new() -> Self");
+        let config = config::get_config();
+        let slm_url = match config.slm_url.as_ref() {
+            Some(slm_url) => slm_url,
+            None => SLM_URL,
+        }
+        .to_string();
         let http_client = Client::builder().build().unwrap();
-        Self { http_client }
+        Self {
+            slm_url,
+            http_client,
+        }
     }
 
     pub async fn exec(&self, request: &SlmRequest) -> AgentStream {
@@ -48,7 +58,7 @@ impl SlmClient {
 
         let response = self
             .http_client
-            .post(SLM_URL)
+            .post(&self.slm_url)
             .json(&request)
             .send()
             .await
@@ -73,7 +83,9 @@ impl SlmClient {
 
 #[cfg(test)]
 mod test {
-    use crate::slm::{SlmClient, SlmRequest};
+    use crate::{
+        slm::{SlmClient, SlmRequest},
+    };
     use futures::StreamExt;
     use tokio::io::{self, AsyncWriteExt};
 
