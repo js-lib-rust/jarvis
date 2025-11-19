@@ -1,3 +1,5 @@
+use std::num::ParseIntError;
+
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -13,6 +15,9 @@ pub enum AppError {
 
     #[error("Parse command error")]
     ParseCommandError,
+
+    #[error("Parse integer error: {0}")]
+    ParseIntError(#[from] ParseIntError),
 
     #[error("Reqwest error: {0}")]
     Reqwest(#[from] reqwest::Error),

@@ -4,6 +4,7 @@ mod config;
 mod error;
 mod logger;
 mod slm;
+mod util;
 
 use crate::{
     agent::rag::RagAgent,
