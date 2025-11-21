@@ -21,6 +21,7 @@ pub fn get_config() -> &'static AppConfig {
 pub struct AppConfig {
     pub slm_url: Option<String>,
     pub rag_system: Option<String>,
+    pub prompt_system: Option<String>,
 }
 
 impl AppConfig {
@@ -39,6 +40,7 @@ impl Default for AppConfig {
         Self {
             slm_url: None,
             rag_system: None,
+            prompt_system: None,
         }
     }
 }

@@ -53,7 +53,7 @@ impl SlmClient {
         }
     }
 
-    pub async fn exec(&self, request: &SlmRequest) -> AgentStream {
+    pub async fn exec(&self, request: SlmRequest) -> AgentStream {
         trace!("exec(&self, request: SlmRequest) -> SlmStream");
 
         let response = self
@@ -95,7 +95,7 @@ mod test {
         let request = SlmRequest::new(prompt);
 
         let slm_client = SlmClient::new();
-        let mut stream = slm_client.exec(&request).await;
+        let mut stream = slm_client.exec(request).await;
         while let Some(chunk) = stream.next().await {
             print!("{}", chunk.unwrap());
             io::stdout().flush().await.unwrap();
@@ -111,7 +111,7 @@ mod test {
         request.set_context(context);
 
         let slm_client = SlmClient::new();
-        let mut stream = slm_client.exec(&request).await;
+        let mut stream = slm_client.exec(request).await;
         while let Some(chunk) = stream.next().await {
             print!("{}", chunk.unwrap());
             io::stdout().flush().await.unwrap();

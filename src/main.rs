@@ -7,13 +7,12 @@ mod slm;
 mod util;
 
 use crate::{
-    agent::rag::RagAgent,
+    agent::{prompt::PromptAgent, rag::RagAgent},
     command::Command,
     error::Result,
-    slm::{SlmClient, SlmRequest},
+    slm::SlmRequest,
 };
 use clap::Parser;
-use futures::Stream;
 use futures_util::StreamExt;
 use log::{debug, trace};
 use tokio::io::{self, AsyncWriteExt};
@@ -100,34 +99,15 @@ async fn main() -> Result<()> {
         request.set_context(&context);
     }
 
-    let processed = match context {
-        Some(_) => process(RagAgent::new().exec(&mut request).await).await,
-        None => false,
+    let mut stream = match context {
+        Some(_) => RagAgent::new().exec(request).await,
+        None => PromptAgent::new().exec(request).await,
     };
 
-    if !processed {
-        let request = SlmRequest::new(&prompt);
-        let _ = process(SlmClient::new().exec(&request).await).await;
+    while let Some(chunk) = stream.next().await {
+        print!("{}", chunk?);
+        let _ = io::stdout().flush().await;
     }
 
     Ok(())
-}
-
-fn process<S>(stream: S) -> impl Future<Output = bool>
-where
-    S: Stream<Item = Result<String>> + Unpin,
-{
-    stream.fold(false, |_, chunk| async move {
-        match chunk {
-            Ok(chunk) => {
-                print!("{}", chunk);
-                let _ = io::stdout().flush().await;
-                true
-            }
-            Err(error) => {
-                println!("fail to process stream chunk: {error}");
-                false
-            }
-        }
-    })
 }

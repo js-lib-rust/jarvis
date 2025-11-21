@@ -4,18 +4,16 @@ use crate::slm::SlmClient;
 use crate::slm::SlmRequest;
 use log::trace;
 
-pub struct RagAgent{
+pub struct PromptAgent{
     system: String,
 }
 
-impl RagAgent {
-    const SYSTEM: &'static str = "Contextual question answering agent that always uses only \
-    the provided context and formats answers in Markdown. If requested information is missing \
-    from context, respond with 'I do not know'.";
+impl PromptAgent {
+    const SYSTEM: &'static str = "Question answering agent";
 
     pub fn new() -> Self {
         let config = config::get_config();
-        let system = match &config.rag_system {
+        let system = match &config.prompt_system {
             Some(system) => system,
             None => Self::SYSTEM,
         }.to_string();
@@ -23,7 +21,7 @@ impl RagAgent {
     }
 
     pub async fn exec(&self, mut request: SlmRequest) -> AgentStream {
-        trace!("RagAgent::exec(&self, mut request: SlmRequest) -> AgentStream");
+        trace!("PromptAgent::exec(&self, mut request: SlmRequest) -> AgentStream");
         request.set_system(&self.system);
         let slm = SlmClient::new();
         slm.exec(request).await
