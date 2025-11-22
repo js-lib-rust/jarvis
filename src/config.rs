@@ -22,6 +22,8 @@ pub struct AppConfig {
     pub slm_url: Option<String>,
     pub rag_system: Option<String>,
     pub prompt_system: Option<String>,
+    pub user_profile: Option<String>,
+    pub system_settings: Option<String>,
 }
 
 impl AppConfig {
@@ -41,6 +43,8 @@ impl Default for AppConfig {
             slm_url: None,
             rag_system: None,
             prompt_system: None,
+            user_profile: None,
+            system_settings: None,
         }
     }
 }

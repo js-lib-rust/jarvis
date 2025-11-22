@@ -11,6 +11,8 @@ const SLM_URL: &str = "http://jarvis.local:1964/";
 pub struct SlmRequest {
     prompt: String,
     system: Option<String>,
+    profile: Option<String>,
+    settings: Option<String>,
     context: Option<String>,
 }
 
@@ -19,12 +21,22 @@ impl SlmRequest {
         Self {
             prompt: prompt.to_string(),
             system: None,
+            profile: None,
+            settings: None,
             context: None,
         }
     }
 
     pub fn set_system(&mut self, system: &str) {
         self.system = Some(system.to_string());
+    }
+
+    pub fn set_profile(&mut self, profile: &str) {
+        self.profile = Some(profile.to_string());
+    }
+
+    pub fn set_settings(&mut self, settings: &str) {
+        self.settings = Some(settings.to_string());
     }
 
     pub fn set_context(&mut self, context: &str) {

@@ -95,6 +95,12 @@ async fn main() -> Result<()> {
     if let Some(system) = args.system {
         request.set_system(&system);
     }
+    if let Some(profile) = &config.user_profile {
+        request.set_profile(&profile);
+    }
+    if let Some(settings) = &config.system_settings {
+        request.set_settings(&settings);
+    }
     if let Some(context) = args.context {
         request.set_context(&context);
     }
