@@ -1,5 +1,4 @@
-use std::sync::Arc;
-
+use crate::util::string::ellipsis;
 use crate::{
     error::AppError,
     llm::LlmRequest,
@@ -21,6 +20,7 @@ use axum::{
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
 use serde_json::Value;
+use std::sync::Arc;
 
 enum ChatResponse {
     Stream(Sse<EventStream>),
@@ -57,6 +57,8 @@ pub(crate) fn router(app_context: Arc<AppContext>) -> Router {
     )
 }
 
+// REQUEST HANDLERS
+
 async fn get_models() -> Json<LlmModels> {
     trace!("get_models() -> Json<Models>");
 
@@ -82,14 +84,14 @@ async fn post_chat_completions(
     } = message
     {
         if confidence > 0.98 {
-            debug!("prompt: {}", prompt.chars().take(100).collect::<String>());
+            debug!("prompt: {}", ellipsis(prompt, 100));
             debug!("text: {text}, confidence: {confidence}, duration: {duration}");
 
             let mut interpreter = Interpreter::new(&text);
             let string_stream = interpreter.eval().await;
             return Ok(ChatResponse::from(string_stream));
         } else {
-            debug!("prompt: {}", prompt.chars().take(100).collect::<String>());
+            debug!("prompt: {}", ellipsis(prompt, 100));
             debug!("confidence: {confidence}, duration: {duration}");
         }
     }
@@ -118,6 +120,8 @@ async fn post_chat_completions(
         Ok(ChatResponse::from(json_value))
     }
 }
+
+// UTILS
 
 async fn get_routing(app_context: Arc<AppContext>, prompt: &str) -> Result<Message> {
     trace!("get_routing(app_context: Arc<AppContext>, prompt: &str) -> llm_router::Message");
