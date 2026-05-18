@@ -1,3 +1,4 @@
+use crate::types::ByteStream;
 use crate::util::string::ellipsis;
 use crate::{
     error::AppError,
@@ -44,6 +45,16 @@ impl From<StringStream> for ChatResponse {
     }
 }
 
+impl From<ByteStream> for ChatResponse {
+    fn from(byte_stream: ByteStream) -> Self {
+        let string_stream = byte_stream
+            .map_ok(|bytes| String::from_utf8_lossy(&bytes).to_string())
+            .map_ok(|string| string.trim_start_matches("data:").to_string())
+            .boxed();
+        ChatResponse::from(string_stream)
+    }
+}
+
 impl From<Value> for ChatResponse {
     fn from(json_value: Value) -> Self {
         ChatResponse::Json(Json(json_value))
@@ -76,12 +87,11 @@ async fn post_chat_completions(
     );
 
     let prompt = request.get_prompt();
-    let message = get_routing(app_context.clone(), &prompt).await?;
     if let Message::Response {
         text,
         confidence,
         duration,
-    } = message
+    } = get_routing(app_context.clone(), &prompt).await?
     {
         if confidence > 0.98 {
             debug!("prompt: {}", ellipsis(prompt, 100));
@@ -104,19 +114,14 @@ async fn post_chat_completions(
         .await?;
 
     if request.is_stream() {
-        let string_stream = response
+        let byte_stream = response
             .bytes_stream()
-            .map_ok(|bytes| {
-                String::from_utf8_lossy(&bytes)
-                    .trim_start_matches("data:")
-                    .trim()
-                    .to_string()
-            })
             .map_err(|err| AppError::Fatal(err.to_string()))
             .boxed();
-        Ok(ChatResponse::from(string_stream))
+        Ok(ChatResponse::from(byte_stream))
     } else {
-        let json_value: Value = serde_json::from_slice(&response.bytes().await?)?;
+        let bytes = response.bytes().await?;
+        let json_value: Value = serde_json::from_slice(&bytes)?;
         Ok(ChatResponse::from(json_value))
     }
 }

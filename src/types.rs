@@ -1,5 +1,6 @@
 use crate::error::AppError;
 use crate::llm_router::LlmRouterClient;
+use axum::body::Bytes;
 use axum::response::sse::Event;
 use futures::StreamExt;
 use futures::{TryStreamExt, stream::Stream};
@@ -25,6 +26,7 @@ impl AppContext {
 
 pub(crate) type Result<T> = std::result::Result<T, AppError>;
 pub(crate) type StringStream = Pin<Box<dyn Stream<Item = Result<String>> + Send>>;
+pub(crate) type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes>> + Send>>;
 pub(crate) type EventStream = Pin<Box<dyn Stream<Item = Result<Event>> + Send>>;
 
 pub(crate) trait ResponseExt {
