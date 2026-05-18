@@ -11,44 +11,40 @@ use log::{debug, trace};
 use serde::Deserialize;
 
 #[derive(Deserialize, Debug)]
-pub(crate) struct Action {
-    agent: String,
-    prompt: String,
+pub(crate) struct Action<'a> {
+    agent: &'a str,
+    prompt: &'a str,
 }
 
-impl Action {
-    fn new(agent: &str, prompt: &str) -> Self {
-        Self {
-            agent: agent.to_string(),
-            prompt: prompt.to_string(),
-        }
+impl<'a> Action<'a> {
+    fn new(agent: &'a str, prompt: &'a str) -> Self {
+        Self { agent, prompt }
     }
 }
 
-pub struct Interpreter {
-    actions: Vec<Action>,
-}
+pub struct Interpreter {}
 
 impl Interpreter {
-    pub fn new(text: &str) -> Self {
-        trace!("new(text: &str) -> Self");
+    pub fn new() -> Self {
+        trace!("new() -> Self");
+        Self {}
+    }
+
+    pub async fn eval(&mut self, text: &str) -> StringStream {
+        trace!("eval(&mut self, text: &str) -> StringStream");
         let actions: Vec<Action> = text
             .lines()
             .map(|line| line.split_once(":"))
             .flatten()
             .map(|(agent, prompt)| Action::new(agent, prompt))
             .collect();
-        Self { actions }
-    }
 
-    pub async fn eval(&mut self) -> StringStream {
-        trace!("eval(&mut self) -> StringStream");
         let mut stack = String::new();
 
         let mut facts_stack = FactsStack::new();
         let mut stream_operations: Vec<StringStream> = Vec::new();
 
-        for action in &self.actions {
+        for action in actions {
             let prompt = facts_stack.inject_variables(&action.prompt);
             debug!("prompt: {}", prompt);
             facts_stack.push_prompt(&prompt);
@@ -60,7 +56,7 @@ impl Interpreter {
             debug!("request: {:?}", request);
 
             debug!("facts: {:?}", facts_stack.facts);
-            let result: Option<String> = match action.agent.as_str() {
+            let result: Option<String> = match action.agent {
                 "time-service" => TimeServiceAgent::new().execs(request).ok(),
                 "user-profile" => UserProfileAgent::new().execs(request).await.ok(),
                 "measure-units" => MeasurementUnitAgent::new().execs(request).ok(),
@@ -78,7 +74,7 @@ impl Interpreter {
             let mut request = SlmRequest::new(&prompt);
             request.add_system(&facts_stack.context);
             request.set_use_history(false);
-            let stream: Option<StringStream> = match action.agent.as_str() {
+            let stream: Option<StringStream> = match action.agent {
                 "query" => QueryAgent::new().exec(request).await.ok(),
                 "printer" => PrinterAgent::new().exec(request).await.ok(),
                 _ => None,

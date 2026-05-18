@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 enum ChatResponse {
     Stream(Sse<EventStream>),
-    Json(Json<serde_json::Value>),
+    Json(Json<Value>),
 }
 
 impl IntoResponse for ChatResponse {
@@ -87,8 +87,8 @@ async fn post_chat_completions(
             debug!("prompt: {}", ellipsis(prompt, 100));
             debug!("text: {text}, confidence: {confidence}, duration: {duration}");
 
-            let mut interpreter = Interpreter::new(&text);
-            let string_stream = interpreter.eval().await;
+            let mut interpreter = Interpreter::new();
+            let string_stream = interpreter.eval(&text).await;
             return Ok(ChatResponse::from(string_stream));
         } else {
             debug!("prompt: {}", ellipsis(prompt, 100));
