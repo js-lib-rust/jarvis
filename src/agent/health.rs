@@ -1,42 +1,34 @@
-use log::{debug, trace};
-use serde::Deserialize;
-
+use crate::llm::ToolClient;
 use crate::service::health::{
     ReadMeasurements, SaveBlood, SaveGlucose, SaveTemperature, SaveWeight,
 };
+use crate::llm::SlmRequest;
 use crate::types::Result;
-use crate::{slm::SlmRequest, sys::Tool};
+use log::trace;
+use serde::Deserialize;
 
-pub struct HealthAgent {}
+pub struct HealthAgent<'a> {
+    tool_client: &'a ToolClient,
+}
 
-impl HealthAgent {
-    pub fn new() -> Self {
-        Self {}
+impl<'a> HealthAgent<'a> {
+    pub fn new(tool_client: &'a ToolClient) -> Self {
+        Self { tool_client }
     }
 
-    pub async fn execs(&self, mut request: SlmRequest) -> Result<String> {
-        trace!("HealthAgent::execs(&self, mut request: SlmRequest) -> Result<String>");
-        debug!("request: {:?}", request);
-
-        request.set_tools("health");
-        let result = match Tool::call(request).await {
-            Some(tool_code) => match serde_json::from_str::<Call>(&tool_code) {
-                Ok(mut call) => match call.exec().await {
-                    Ok(result) => result,
-                    Err(error) => error.to_string(),
-                },
-                Err(_) => tool_code,
-            },
-            None => String::from("cannot reliable determine the function"),
-        };
-        debug!("tool result: {result}");
-        Ok(result)
+    pub async fn exec(&self, request: &SlmRequest) -> Result<String> {
+        trace!("exec(&self, request: &SlmRequest) -> Result<String>");
+        let mut function: Function = self
+            .tool_client
+            .get_function(request.get_prompt(), "health")
+            .await?;
+        function.exec().await
     }
 }
 
 #[derive(Deserialize)]
 #[serde(tag = "function")]
-enum Call {
+enum Function {
     #[serde(rename = "save_blood_measurement")]
     SaveBlood(SaveBlood),
     #[serde(rename = "save_temperature")]
@@ -49,14 +41,14 @@ enum Call {
     ReadMeasurements(ReadMeasurements),
 }
 
-impl Call {
+impl Function {
     async fn exec(&mut self) -> Result<String> {
         match self {
-            Call::SaveBlood(call) => call.exec().await,
-            Call::SaveTemperature(call) => call.exec().await,
-            Call::SaveWeight(call) => call.exec().await,
-            Call::SaveGlucose(call) => call.exec().await,
-            Call::ReadMeasurements(call) => call.exec().await,
+            Function::SaveBlood(call) => call.exec().await,
+            Function::SaveTemperature(call) => call.exec().await,
+            Function::SaveWeight(call) => call.exec().await,
+            Function::SaveGlucose(call) => call.exec().await,
+            Function::ReadMeasurements(call) => call.exec().await,
         }
     }
 }

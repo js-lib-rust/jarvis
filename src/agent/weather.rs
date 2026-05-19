@@ -1,44 +1,34 @@
-use log::{debug, trace};
+use crate::{
+    llm::ToolClient,
+    service::weather::{GetCurrentWeather, GetForecast, GetTodayForecast},
+    llm::SlmRequest,
+    types::Result,
+};
+use log::trace;
 use serde::Deserialize;
 
-use crate::{
-    sys::Tool,
-    types::Result,
-    service::weather::{GetCurrentWeather, GetForecast, GetTodayForecast},
-    slm::SlmRequest,
-};
+pub struct WeatherAgent<'a> {
+    tool_client: &'a ToolClient,
+}
 
-pub struct WeatherAgent {}
-
-impl WeatherAgent {
-    pub fn new() -> Self {
-        Self {}
+impl<'a> WeatherAgent<'a> {
+    pub fn new(tool_client: &'a ToolClient) -> Self {
+        Self { tool_client }
     }
 
-    pub async fn execs(&self, mut request: SlmRequest) -> Result<String> {
-        trace!("WeatherAgent::execs(&self, mut request: SlmRequest) -> Result<String>");
-        debug!("request: {:?}", request);
-
-        request.set_tools("weather");
-        let result = match Tool::call(request).await {
-            Some(tool_code) => match serde_json::from_str::<Call>(&tool_code) {
-                Ok(call) => match call.exec().await {
-                    Ok(result) => result,
-                    Err(error) => error.to_string(),
-                },
-                Err(_) => tool_code,
-            },
-            None => String::from("cannot reliable determine the function"),
-        };
-        debug!("tool result: {result}");
-
-        Ok(result)
+    pub async fn exec(&self, request: &SlmRequest) -> Result<String> {
+        trace!("exec(&self, request: &SlmRequest) -> Result<String>");
+        let function: Function = self
+            .tool_client
+            .get_function(request.get_prompt(), "weather")
+            .await?;
+        function.exec().await
     }
 }
 
 #[derive(Deserialize, Debug)]
 #[serde(tag = "function")]
-enum Call {
+enum Function {
     #[serde(rename = "get_current_weather")]
     GetCurrentWeather(GetCurrentWeather),
     #[serde(rename = "get_forecast")]
@@ -47,12 +37,12 @@ enum Call {
     GetTodayForecast(GetTodayForecast),
 }
 
-impl Call {
+impl Function {
     async fn exec(&self) -> Result<String> {
         match self {
-            Call::GetCurrentWeather(call) => call.exec().await,
-            Call::GetForecast(call) => call.exec().await,
-            Call::GetTodayForecast(call) => call.exec().await,
+            Function::GetCurrentWeather(call) => call.exec().await,
+            Function::GetForecast(call) => call.exec().await,
+            Function::GetTodayForecast(call) => call.exec().await,
         }
     }
 }

@@ -30,6 +30,14 @@ pub(crate) struct Args {
     #[arg(
         short,
         long,
+        default_value = "http://jarvis.local:1967/",
+        help = "URL for tool model"
+    )]
+    pub(crate) tool_url: String,
+
+    #[arg(
+        short,
+        long,
         default_value = "http://jarvis.local/v1/chat/completions",
         help = "URL for local LLM API."
     )]

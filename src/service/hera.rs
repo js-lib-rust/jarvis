@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::net::ToSocketAddrs;
 
-use crate::{error::AppError, slm::SlmRequest, types::Result, util::string};
+use crate::{error::AppError, llm::SlmRequest, types::Result, util::string};
 
 #[derive(Deserialize, Serialize, Debug)]
 enum DeviceType {

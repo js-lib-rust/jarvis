@@ -3,9 +3,10 @@ use crate::agent::hera::HeraAgent;
 use crate::agent::printer::PrinterAgent;
 use crate::agent::query::QueryAgent;
 use crate::agent::weather::WeatherAgent;
+use crate::llm::ToolClient;
 use crate::proc::stack::FactsStack;
 use crate::types::StringStream;
-use crate::{agent::health::HealthAgent, slm::SlmRequest};
+use crate::{agent::health::HealthAgent, llm::SlmRequest};
 use futures::{StreamExt, stream};
 use log::{debug, trace};
 use serde::Deserialize;
@@ -22,12 +23,14 @@ impl<'a> Action<'a> {
     }
 }
 
-pub struct Interpreter {}
+pub struct Interpreter<'a> {
+    tool_client: &'a ToolClient,
+}
 
-impl Interpreter {
-    pub fn new() -> Self {
+impl <'a> Interpreter<'a> {
+    pub fn new(tool_client: &'a ToolClient) -> Self {
         trace!("new() -> Self");
-        Self {}
+        Self { tool_client }
     }
 
     pub async fn eval(&mut self, text: &str) -> StringStream {
@@ -57,12 +60,12 @@ impl Interpreter {
 
             debug!("facts: {:?}", facts_stack.facts);
             let result: Option<String> = match action.agent {
-                "time-service" => TimeServiceAgent::new().execs(request).ok(),
-                "user-profile" => UserProfileAgent::new().execs(request).await.ok(),
-                "measure-units" => MeasurementUnitAgent::new().execs(request).ok(),
-                "health" => HealthAgent::new().execs(request).await.ok(),
-                "weather" => WeatherAgent::new().execs(request).await.ok(),
-                "home-automation" => HeraAgent::new().execs(request).await.ok(),
+                "time-service" => TimeServiceAgent::new().exec(&request).ok(),
+                "user-profile" => UserProfileAgent::new().exec(&request).await.ok(),
+                "measure-units" => MeasurementUnitAgent::new().exec(&request).ok(),
+                "health" => HealthAgent::new(self.tool_client).exec(&mut request).await.ok(),
+                "weather" => WeatherAgent::new(self.tool_client).exec(&mut request).await.ok(),
+                "home-automation" => HeraAgent::new(self.tool_client).exec(&mut request).await.ok(),
                 _ => None,
             };
             if let Some(response) = result {

@@ -1,7 +1,8 @@
 use crate::error::AppError;
 use crate::types::Result;
+use log::debug;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
@@ -9,7 +10,7 @@ use tokio::time::{interval, timeout};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type", rename_all = "lowercase")]
-pub enum Message {
+pub enum RouterMessage {
     Ping,
     Pong,
     Request {
@@ -23,19 +24,19 @@ pub enum Message {
 }
 
 #[derive(Clone, Debug)]
-pub struct LlmRouterClient {
+pub struct RouterClient {
     cmd_tx: mpsc::Sender<ClientCommand>,
 }
 
 #[derive(Debug)]
 enum ClientCommand {
     Send {
-        request: Message,
-        resp_tx: oneshot::Sender<Message>,
+        request: RouterMessage,
+        resp_tx: oneshot::Sender<RouterMessage>,
     },
 }
 
-impl LlmRouterClient {
+impl RouterClient {
     pub async fn connect(addr: &str) -> Result<Self> {
         let stream = TcpStream::connect(addr).await?;
         let (mut reader, mut writer) = tokio::io::split(stream);
@@ -44,13 +45,13 @@ impl LlmRouterClient {
         tokio::spawn(async move {
             let mut heartbeat_timer = interval(Duration::from_secs(10));
             // use a single slot for the pending response because it's a dedicated connection
-            let mut pending_responder: Option<oneshot::Sender<Message>> = None;
+            let mut pending_responder: Option<oneshot::Sender<RouterMessage>> = None;
 
             loop {
                 tokio::select! {
                     // 1. Handle Heartbeats
                     _ = heartbeat_timer.tick() => {
-                        let p = serde_json::to_vec(&Message::Ping).unwrap();
+                        let p = serde_json::to_vec(&RouterMessage::Ping).unwrap();
                         let _ = writer.write_all(&(p.len() as u32).to_be_bytes()).await;
                         let _ = writer.write_all(&p).await;
                     }
@@ -61,7 +62,7 @@ impl LlmRouterClient {
                             ClientCommand::Send { request, resp_tx } => {
                                 // If there was a previous request still waiting, drop it (or error)
                                 if let Some(old) = pending_responder.take() {
-                                    let _ = old.send(Message::Response { text: "Error: Busy".into(), confidence: 1.0, duration: 0.0 });
+                                    let _ = old.send(RouterMessage::Response { text: "Error: Busy".into(), confidence: 1.0, duration: 0.0 });
                                 }
 
                                 let p = serde_json::to_vec(&request).unwrap();
@@ -79,8 +80,8 @@ impl LlmRouterClient {
                         match res {
                             Ok(msg) => {
                                 match msg {
-                                    Message::Pong => { /* Heartbeat acknowledged, do nothing */ }
-                                    Message::Request { .. } | Message::Response { .. } => {
+                                    RouterMessage::Pong => { /* Heartbeat acknowledged, do nothing */ }
+                                    RouterMessage::Request { .. } | RouterMessage::Response { .. } => {
                                         // This is the response to our request!
                                         if let Some(tx) = pending_responder.take() {
                                             let _ = tx.send(msg);
@@ -96,14 +97,15 @@ impl LlmRouterClient {
             }
         });
 
-        Ok(LlmRouterClient { cmd_tx })
+        Ok(RouterClient { cmd_tx })
     }
 
-    pub async fn request(&self, prompt: &str) -> Result<Message> {
+    pub async fn request(&self, prompt: &str) -> Result<RouterMessage> {
         let (tx, rx) = oneshot::channel();
 
+        let start = Instant::now();
         let payload = serde_json::json!({"prompt": prompt});
-        let request = Message::Request { payload };
+        let request = RouterMessage::Request { payload };
 
         self.cmd_tx
             .send(ClientCommand::Send {
@@ -113,14 +115,19 @@ impl LlmRouterClient {
             .await
             .map_err(|e| AppError::Fatal(e.to_string()))?;
 
-        timeout(Duration::from_secs(10), rx)
+        let result = timeout(Duration::from_secs(10), rx)
             .await?
-            .map_err(|e| AppError::Fatal(e.to_string()))
+            .map_err(|e| AppError::Fatal(e.to_string()));
+        debug!(
+            "Routing processing time: {} msec.",
+            start.elapsed().as_millis()
+        );
+        result
     }
 }
 
 // Helper function to handle the framing logic
-async fn read_next_msg(reader: &mut tokio::io::ReadHalf<TcpStream>) -> Result<Message> {
+async fn read_next_msg(reader: &mut tokio::io::ReadHalf<TcpStream>) -> Result<RouterMessage> {
     let mut len_bytes = [0u8; 4];
     reader.read_exact(&mut len_bytes).await?;
     let len = u32::from_be_bytes(len_bytes) as usize;

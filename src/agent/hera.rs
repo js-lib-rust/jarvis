@@ -1,47 +1,38 @@
-use log::{debug, trace};
-use serde::Deserialize;
-
 use crate::{
+    llm::ToolClient,
     service::hera::{
         DescribeDevice, GetDeviceActions, GetHeatingState, ListDevices, ReadHumidity, ReadSensors,
         ReadTemperature, RunDeviceDiagnose, RunDiagnose, RunSystemDiagnose, StartHeating,
         StopHeating,
     },
-    slm::SlmRequest,
-    sys::Tool,
+    llm::SlmRequest,
     types::Result,
 };
+use log::trace;
+use serde::Deserialize;
 
-pub struct HeraAgent {}
+pub struct HeraAgent<'a> {
+    tool_client: &'a ToolClient,
+}
 
-impl HeraAgent {
-    pub fn new() -> Self {
-        Self {}
+impl<'a> HeraAgent<'a> {
+    pub fn new(tool_client: &'a ToolClient) -> Self {
+        Self { tool_client }
     }
 
-    pub async fn execs(&self, mut request: SlmRequest) -> Result<String> {
-        trace!("HeraAgent::execs(&self, request: SlmRequest) -> Result<String>");
-        debug!("request: {:?}", request);
-
-        request.set_tools("hera");
-        let result = match Tool::call(request).await {
-            Some(tool_code) => match serde_json::from_str::<Call>(&tool_code) {
-                Ok(call) => match call.exec().await {
-                    Ok(result) => result,
-                    Err(error) => error.to_string(),
-                },
-                Err(_) => tool_code,
-            },
-            None => String::from("cannot reliable determine the function"),
-        };
-        debug!("tool result: {result}");
-        Ok(result)
+    pub async fn exec(&self, request: &SlmRequest) -> Result<String> {
+        trace!("exec(&self, request: &SlmRequest) -> Result<String>");
+        let function: Function = self
+            .tool_client
+            .get_function(request.get_prompt(), "hera")
+            .await?;
+        function.exec().await
     }
 }
 
 #[derive(Deserialize, Debug)]
 #[serde(tag = "function")]
-enum Call {
+enum Function {
     #[serde(rename = "list_devices")]
     ListDevices(ListDevices),
     #[serde(rename = "describe_device")]
@@ -68,21 +59,21 @@ enum Call {
     RunSystemDiagnose(RunSystemDiagnose),
 }
 
-impl Call {
+impl Function {
     async fn exec(&self) -> Result<String> {
         match self {
-            Call::ListDevices(call) => call.exec(),
-            Call::DescribeDevice(call) => call.exec().await,
-            Call::GetDeviceActions(call) => call.exec().await,
-            Call::ReadTemperature(call) => call.exec().await,
-            Call::ReadHumidity(call) => call.exec().await,
-            Call::ReadSensors(call) => call.exec().await,
-            Call::StartHeating(call) => call.exec().await,
-            Call::StopHeating(call) => call.exec().await,
-            Call::GetHeatingState(call) => call.exec().await,
-            Call::RunDiagnose(call) => call.exec().await,
-            Call::RunDeviceDiagnose(call) => call.exec().await,
-            Call::RunSystemDiagnose(call) => call.exec().await,
+            Function::ListDevices(call) => call.exec(),
+            Function::DescribeDevice(call) => call.exec().await,
+            Function::GetDeviceActions(call) => call.exec().await,
+            Function::ReadTemperature(call) => call.exec().await,
+            Function::ReadHumidity(call) => call.exec().await,
+            Function::ReadSensors(call) => call.exec().await,
+            Function::StartHeating(call) => call.exec().await,
+            Function::StopHeating(call) => call.exec().await,
+            Function::GetHeatingState(call) => call.exec().await,
+            Function::RunDiagnose(call) => call.exec().await,
+            Function::RunDeviceDiagnose(call) => call.exec().await,
+            Function::RunSystemDiagnose(call) => call.exec().await,
         }
     }
 }

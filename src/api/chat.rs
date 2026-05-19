@@ -3,9 +3,9 @@ use crate::util::string::ellipsis;
 use crate::{
     error::AppError,
     llm::LlmRequest,
-    llm_router::Message,
+    llm::RouterMessage,
     proc::Interpreter,
-    types::{AppContext, Result, StringStream},
+    types::{AppState, Result, StringStream},
 };
 use crate::{
     llm::{LlmModel, LlmModelData, LlmModels},
@@ -61,7 +61,7 @@ impl From<Value> for ChatResponse {
     }
 }
 
-pub(crate) fn router(app_context: Arc<AppContext>) -> Router {
+pub(crate) fn router(app_context: Arc<AppState>) -> Router {
     Router::new().route("/models", get(get_models)).route(
         "/chat/completions",
         post(post_chat_completions).with_state(app_context),
@@ -79,7 +79,7 @@ async fn get_models() -> Json<LlmModels> {
 }
 
 async fn post_chat_completions(
-    State(app_context): State<Arc<AppContext>>,
+    State(app_state): State<Arc<AppState>>,
     Json(request): Json<LlmRequest>,
 ) -> Result<ChatResponse> {
     trace!(
@@ -87,17 +87,17 @@ async fn post_chat_completions(
     );
 
     let prompt = request.get_prompt();
-    if let Message::Response {
+    if let RouterMessage::Response {
         text,
         confidence,
         duration,
-    } = get_routing(app_context.clone(), &prompt).await?
+    } = get_routing(app_state.clone(), &prompt).await?
     {
         if confidence > 0.98 {
             debug!("prompt: {}", ellipsis(prompt, 100));
             debug!("text: {text}, confidence: {confidence}, duration: {duration}");
 
-            let mut interpreter = Interpreter::new();
+            let mut interpreter = Interpreter::new(&app_state.tool_client);
             let string_stream = interpreter.eval(&text).await;
             return Ok(ChatResponse::from(string_stream));
         } else {
@@ -106,9 +106,9 @@ async fn post_chat_completions(
         }
     }
 
-    let response = app_context
+    let response = app_state
         .http_client
-        .post(&app_context.model_url)
+        .post(&app_state.model_url)
         .json(&request)
         .send()
         .await?;
@@ -128,7 +128,7 @@ async fn post_chat_completions(
 
 // UTILS
 
-async fn get_routing(app_context: Arc<AppContext>, prompt: &str) -> Result<Message> {
+async fn get_routing(app_context: Arc<AppState>, prompt: &str) -> Result<RouterMessage> {
     trace!("get_routing(app_context: Arc<AppContext>, prompt: &str) -> llm_router::Message");
     app_context.router_client.request(prompt).await
 }

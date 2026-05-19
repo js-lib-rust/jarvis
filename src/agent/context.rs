@@ -2,7 +2,7 @@ use log::{debug, trace};
 
 use crate::types::Result;
 use crate::service::{self, Property};
-use crate::slm::SlmRequest;
+use crate::llm::SlmRequest;
 
 pub struct TimeServiceAgent {}
 
@@ -12,7 +12,7 @@ impl TimeServiceAgent {
         Self {}
     }
 
-    pub fn execs(&self, request: SlmRequest) -> Result<String> {
+    pub fn exec(&self, request: &SlmRequest) -> Result<String> {
         trace!("TimeServiceAgent::exec(&self, request: SlmRequest) -> Result<String>");
         let prompt = request.get_prompt().to_string();
         debug!("prompt: {prompt}");
@@ -27,7 +27,7 @@ impl UserProfileAgent {
         Self {}
     }
 
-    pub async fn execs(&self, request: SlmRequest) -> Result<String> {
+    pub async fn exec(&self, request: &SlmRequest) -> Result<String> {
         trace!("UserProfileAgent::exec(&self, request: SlmRequest) -> Result<String>");
         let prompt = request.get_prompt().to_string();
         debug!("prompt: {prompt}");
@@ -51,7 +51,7 @@ impl MeasurementUnitAgent {
         Self {}
     }
 
-    pub fn execs(&self, request: SlmRequest) -> Result<String> {
+    pub fn exec(&self, request: &SlmRequest) -> Result<String> {
         trace!("MeasurementUnitAgent::exec(&self, request: SlmRequest) -> Result<String>");
         let prompt = request.get_prompt().to_string();
         debug!("prompt: {prompt}");

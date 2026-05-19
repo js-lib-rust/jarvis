@@ -1,18 +1,57 @@
+use std::time::Instant;
+
+use crate::error::AppError;
+use crate::llm::{SlmClient, SlmRequest};
+use crate::types::Result;
 use futures::StreamExt;
 use log::{debug, trace};
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::slm::{SlmClient, SlmRequest};
+#[derive(Debug)]
+pub(crate) struct ToolClient {
+    tool_url: String,
+    http_client: reqwest::Client,
+}
 
-pub struct Tool {}
+impl ToolClient {
+    pub async fn connect(addr: &str) -> Result<Self> {
+        let http_client = reqwest::Client::new();
+        Ok(Self {
+            tool_url: addr.to_string(),
+            http_client,
+        })
+    }
 
-impl Tool {
-    pub async fn call(request: SlmRequest) -> Option<String> {
-        trace!("sys:Tool::call(request: SlmRequest) -> Option<String>");
+    pub(crate) async fn get_function<T>(&self, prompt: &str, tools: &str) -> Result<T>
+    where
+        T: DeserializeOwned,
+    {
+        trace!(
+            "get_function<T>(&self, prompt: &str, tools: &str) -> Result<T> where T: DeserializeOwned"
+        );
+        let start = Instant::now();
+        let request = SlmRequest::with_tools(prompt, tools);
+        let result = match self.exec(&request).await {
+            Some(tool_code) => serde_json::from_str::<T>(&tool_code)
+                .map_err(|error| AppError::Fatal(error.to_string())),
+            None => Err(AppError::Fatal(
+                "cannot reliable determine the function".to_string(),
+            )),
+        };
+        debug!(
+            "Tool function processing time: {} msec.",
+            start.elapsed().as_millis()
+        );
+        result
+    }
+
+    async fn exec(&self, request: &SlmRequest) -> Option<String> {
+        trace!("exec(&self, request: &SlmRequest) -> Option<String>");
         debug!("request: {:?}", request);
 
-        let slm = SlmClient::for_url("http://jarvis.local:1967/");
+        let slm = SlmClient::for_client(&self.tool_url, &self.http_client);
         let mut stream = slm.exec(request).await;
         let mut result = String::new();
         while let Some(chunk) = stream.next().await {
@@ -38,7 +77,7 @@ impl Tool {
             #[serde(rename = "confidence_min")]
             _confidence_min: f32,
         }
-        
+
         let value: Vec<Response> = serde_json::from_str(&result).ok()?;
         debug!("value: {:?}", value);
         if let Some(response) = value.get(0) {

@@ -2,11 +2,16 @@ use crate::types::Result;
 use crate::{error::AppError, types::StringStream};
 use async_stream::stream;
 use futures::{StreamExt, executor::block_on};
+use lazy_static::lazy_static;
 use log::{debug, error, trace};
 use reqwest::Client;
 use serde::Serialize;
 
 const SLM_URL: &str = "http://jarvis.local:1964/";
+
+lazy_static! {
+    static ref HTTP_CLIENT: Client = Client::new();
+}
 
 #[derive(Debug, Serialize)]
 pub struct SlmRequest {
@@ -28,7 +33,17 @@ impl SlmRequest {
         }
     }
 
-    pub fn exec(self) -> Result<String> {
+    pub(crate) fn with_tools(prompt: &str, tools: &str) -> Self {
+        Self {
+            prompt: prompt.to_string(),
+            system: None,
+            tools: Some(tools.to_string()),
+            context: None,
+            use_history: true,
+        }
+    }
+
+    pub fn exec(&self) -> Result<String> {
         let client = SlmClient::new();
         client.block_exec(self)
     }
@@ -53,39 +68,38 @@ impl SlmRequest {
         }
     }
 
-    pub fn set_tools(&mut self, tools: &str) {
-        self.tools = Some(tools.to_string());
-    }
-
     pub fn set_use_history(&mut self, use_history: bool) {
         self.use_history = use_history;
     }
 }
 
-pub struct SlmClient {
+pub struct SlmClient<'a> {
     slm_url: String,
-    http_client: Client,
+    http_client: &'a Client,
 }
 
-impl SlmClient {
+impl <'a> SlmClient<'a> {
     pub fn new() -> Self {
         trace!("SlmClient::new() -> Self");
-        Self {
-            slm_url: SLM_URL.to_string(),
-            http_client: Client::builder().build().unwrap(),
-        }
+        Self::for_url(SLM_URL)
     }
 
     pub fn for_url(slm_url: &str) -> Self {
         trace!("SlmClient::for_url(slm_url: &str) -> Self");
-        let http_client = Client::builder().build().unwrap();
+        Self {
+            slm_url: slm_url.to_string(),
+            http_client: &HTTP_CLIENT,
+        }
+    }
+
+    pub fn for_client(slm_url: &str, http_client: &'a Client) -> Self {
         Self {
             slm_url: slm_url.to_string(),
             http_client,
         }
     }
 
-    pub async fn exec(&self, request: SlmRequest) -> StringStream {
+    pub async fn exec(&self, request: &SlmRequest) -> StringStream {
         trace!("SlmClient::exec(&self, request: SlmRequest) -> SlmStream");
         debug!("request: {:?}", request);
         debug!("slm_url: {}", self.slm_url);
@@ -132,7 +146,7 @@ impl SlmClient {
         })
     }
 
-    pub fn block_exec(&self, request: SlmRequest) -> Result<String> {
+    pub fn block_exec(&self, request: &SlmRequest) -> Result<String> {
         trace!("SlmClient::block_exec(&self, request: SlmRequest) -> Result<String>");
         block_on(async {
             let mut stream = self.exec(request).await;

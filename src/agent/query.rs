@@ -1,4 +1,4 @@
-use crate::slm::SlmRequest;
+use crate::llm::SlmRequest;
 use crate::types::{ResponseExt, Result, StringStream};
 use crate::{error::AppError, llm::LlmRequest};
 use log::{debug, trace};
