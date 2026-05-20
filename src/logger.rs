@@ -1,6 +1,6 @@
-use chrono::{Local};
+use chrono::Local;
 use env_logger::{Builder, Env, Target};
-use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::Write;
 use std::thread;
 
@@ -19,11 +19,13 @@ pub(crate) fn init(level: &str, file_path: &Option<String>) {
     });
 
     if let Some(file_path) = file_path {
-        if let Ok(file) = File::create(file_path) {
+        let file_result = OpenOptions::new().append(true).create(true).open(file_path);
+        if let Ok(file) = file_result {
             builder.target(Target::Pipe(Box::new(file)));
+        } else {
+            eprintln!("Failed to open log file: {:?}", file_path);
         }
     }
 
     builder.init();
 }
-
