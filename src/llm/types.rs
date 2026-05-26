@@ -42,7 +42,7 @@ impl LlmRequest {
         }
     }
 
-    pub(crate) fn get_prompt(&self) -> Option<&str> {
+    pub(crate) fn get_routable_prompt(&self) -> Option<&str> {
         trace!("get_prompt(&self) -> Option<&str>");
         self.messages
             .iter()

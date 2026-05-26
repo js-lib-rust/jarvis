@@ -86,23 +86,28 @@ async fn post_chat_completions(
         "post_chat_completions(State(app_context): State<Arc<AppContext>>, Json(request): Json<Request>) -> ChatResponse"
     );
 
-    if let Some(prompt) = request.get_prompt() {
-        if let RouterMessage::Response {
-            text,
-            confidence,
-            duration,
-        } = get_routing(app_state.clone(), &prompt).await?
-        {
-            if confidence > 0.98 {
-                debug!("prompt: {}", ellipsis(prompt, 100));
+    if let Some(prompt) = request.get_routable_prompt() {
+        debug!("prompt: {}", ellipsis(prompt, 100));
+        match get_routing(app_state.clone(), &prompt).await? {
+            RouterMessage::Response {
+                text,
+                confidence,
+                duration,
+            } if confidence > 0.98 => {
                 debug!("text: {text}, confidence: {confidence}, duration: {duration}");
-
                 let mut interpreter = Interpreter::new(&app_state.tool_client);
                 let string_stream = interpreter.eval(&text).await;
                 return Ok(ChatResponse::from(string_stream));
-            } else {
-                debug!("prompt: {}", ellipsis(prompt, 100));
+            }
+            RouterMessage::Response {
+                confidence,
+                duration,
+                ..
+            } => {
                 debug!("confidence: {confidence}, duration: {duration}");
+            }
+            _ => {
+                trace!("Routing returned a non-response variant");
             }
         }
     }
