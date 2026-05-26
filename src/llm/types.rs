@@ -1,4 +1,5 @@
 use chrono::Utc;
+use log::trace;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -41,13 +42,14 @@ impl LlmRequest {
         }
     }
 
-    pub(crate) fn get_prompt(&self) -> &str {
+    pub(crate) fn get_prompt(&self) -> Option<&str> {
+        trace!("get_prompt(&self) -> Option<&str>");
         self.messages
             .iter()
             .rev()
             .find(|m| m.role == "user")
             .map(|m| m.content.as_str())
-            .unwrap_or("missing user prompt")
+            .filter(|&prompt| prompt.len() < 200)
     }
 
     pub(crate) fn is_stream(&self) -> bool {
