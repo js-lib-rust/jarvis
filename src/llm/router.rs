@@ -8,7 +8,10 @@ use std::time::{Duration, Instant};
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
-use tokio::time::{interval, timeout};
+use tokio::time::{interval, sleep, timeout};
+
+// retry delay in seconds for TCP connection with router service 
+static CONNECTION_RETRY_DELAY: Duration = Duration::from_secs(4);
 
 /// The public message format used for communication.
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -65,11 +68,9 @@ impl RouterClient {
         trace!("connect(router_address: &str) -> Result<Self>");
         let (control_sender, mut control_receiver) = mpsc::channel::<ControlMessage>(32);
 
-        // The Manager Loop: This lives for the entire duration of the application.
+        // the connection manager loop: lives for the entire duration of the application
         let router_address = router_address.to_string();
         tokio::spawn(async move {
-            let mut retry_interval = interval(Duration::from_secs(5));
-
             loop {
                 info!("Attempting to connect to {}...", router_address);
 
@@ -85,8 +86,7 @@ impl RouterClient {
                     }
                 }
 
-                // Wait before the next reconnection attempt
-                retry_interval.tick().await;
+                sleep(CONNECTION_RETRY_DELAY).await;
             }
         });
 
