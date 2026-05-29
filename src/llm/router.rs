@@ -45,7 +45,7 @@ enum ControlMessage {
     Send {
         request: TcpMessage,
         // sender end of the oneshot response channel between TCP connection manager thread and client thread
-        // response channel is used to convey server response messsage back to client
+        // response channel is used to convey server response message back to client
         response_channel_sender: oneshot::Sender<TcpMessage>,
     },
     _Shutdown,
@@ -62,6 +62,7 @@ impl RouterClient {
     /// Establishes a connection and starts a background manager that handles
     /// automatic reconnections if the socket fails.
     pub async fn connect(router_address: &str) -> Result<Self> {
+        trace!("connect(router_address: &str) -> Result<Self>");
         let (control_sender, mut control_receiver) = mpsc::channel::<ControlMessage>(32);
 
         // The Manager Loop: This lives for the entire duration of the application.
@@ -105,16 +106,16 @@ impl RouterClient {
     /// Sends a request to the router and waits for a response.
     /// This method handles the high-level logic of the request-response lifecycle.
     pub async fn get_routing(&self, prompt: &str) -> Result<RouterResponse> {
-
+        trace!("get_routing(&self, prompt: &str) -> Result<RouterResponse>");
         let (response_channel_sender, response_channel_receiver) = oneshot::channel();
         let start = Instant::now();
 
         #[derive(Serialize)]
         struct Payload<'a> {
-            prompt: &'a str
+            prompt: &'a str,
         }
         let request = TcpMessage::Request {
-            payload: serde_json::to_value(Payload{prompt})?,
+            payload: serde_json::to_value(Payload { prompt })?,
         };
 
         // Send the instruction to the background worker
@@ -128,8 +129,7 @@ impl RouterClient {
 
         // Wait for the response with a timeout
         let response = timeout(Duration::from_secs(10), response_channel_receiver)
-            .await
-            .map_err(|_| AppError::Fatal("Request timed out".into()))?
+            .await?
             .map_err(|e| AppError::Fatal(format!("Response channel closed: {}", e)))?;
 
         debug!(
@@ -144,18 +144,19 @@ impl RouterClient {
 struct TcpConnection {
     // read half of the TCP stream with the router server
     tcp_reader: ReadHalf<TcpStream>,
-    // write half of the TCP stream with the router serer
+    // write half of the TCP stream with the router server
     tcp_writer: WriteHalf<TcpStream>,
     // sender end of the oneshot response channel between TCP connection manager thread and client thread
-    // response channel is used to convey server response messsage back to client
+    // response channel is used to convey server response message back to client
     response_channel_sender: Option<oneshot::Sender<TcpMessage>>,
 }
 
 impl TcpConnection {
     fn new(tcp_stream: TcpStream) -> Self {
+        trace!("new(tcp_stream: TcpStream) -> Self");
         let (tcp_reader, tcp_writer) = io::split(tcp_stream);
         Self {
-            tcp_reader: tcp_reader,
+            tcp_reader,
             tcp_writer,
             response_channel_sender: None,
         }
@@ -163,13 +164,14 @@ impl TcpConnection {
 
     /// The main event loop for the active connection.
     async fn run(&mut self, control_channel_receiver: &mut mpsc::Receiver<ControlMessage>) {
+        trace!("run(&mut self, control_channel_receiver: &mut mpsc::Receiver<ControlMessage>)");
         let mut heartbeat_timer = interval(Duration::from_secs(10));
 
         loop {
             let result = tokio::select! {
                 _ = heartbeat_timer.tick() => self.on_heartbeat().await,
-                Some(control_messsage) = control_channel_receiver.recv() => self.on_control_message(control_messsage).await,
-                Ok(tcp_messsage) = self.read_tcp_message() => self.on_tcp_message(&tcp_messsage).await,
+                Some(control_message) = control_channel_receiver.recv() => self.on_control_message(control_message).await,
+                Ok(tcp_message) = self.read_tcp_message() => self.on_tcp_message(tcp_message).await,
             };
             if let Err(error) = result {
                 error!("Fail on router processing: {}", error);
@@ -212,16 +214,16 @@ impl TcpConnection {
         Ok(())
     }
 
-    async fn on_tcp_message(&mut self, tcp_message: &TcpMessage) -> Result<()> {
-        trace!("on_tcp_message(&mut self, tcp_message: &TcpMessage) -> Result<()>");
+    async fn on_tcp_message(&mut self, tcp_message: TcpMessage) -> Result<()> {
+        trace!("on_tcp_message(&mut self, tcp_message: TcpMessage) -> Result<()>");
         debug!("tcp_message: {:?}", tcp_message);
 
-        let _ = match tcp_message {
+        match tcp_message {
             TcpMessage::Pong => (), // heartbeat acknowledged, do nothing
 
             TcpMessage::Response { .. } => {
                 if let Some(response_channel_sender) = self.response_channel_sender.take() {
-                    let _ = response_channel_sender.send(tcp_message.clone());
+                    let _ = response_channel_sender.send(tcp_message);
                 }
             }
 
@@ -242,7 +244,9 @@ impl TcpConnection {
         let json = serde_json::to_vec(tcp_message)?;
         let json_length = json.len() as u32;
 
-        self.tcp_writer.write_all(&json_length.to_be_bytes()).await?;
+        self.tcp_writer
+            .write_all(&json_length.to_be_bytes())
+            .await?;
         self.tcp_writer.write_all(&json).await?;
         self.tcp_writer.flush().await?;
         Ok(())
@@ -253,9 +257,7 @@ impl TcpConnection {
         trace!("read_tcp_message(&mut self) -> Result<TcpMessage>");
 
         let mut json_length_buffer = [0u8; 4];
-        self.tcp_reader
-            .read_exact(&mut json_length_buffer)
-            .await?;
+        self.tcp_reader.read_exact(&mut json_length_buffer).await?;
         let json_length = u32::from_be_bytes(json_length_buffer) as usize;
 
         let mut json_buffer = vec![0u8; json_length];
