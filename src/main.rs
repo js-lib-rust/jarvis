@@ -28,7 +28,10 @@ async fn main() -> Result<()> {
     debug!("socket_addr: {}", socket_addr);
     let tcp_listener = tokio::net::TcpListener::bind(socket_addr).await?;
     debug!("tcp_listener: {:?}", tcp_listener);
-    let rest_controller = api::create_router(app_state);
+    let rest_controller = api::create_router(app_state.clone());
     debug!("rest_controller: {:?}", rest_controller);
-    Ok(axum::serve(tcp_listener, rest_controller).await?)
+
+    let result = axum::serve(tcp_listener, rest_controller).await?;
+    app_state.dispose().await;
+    Ok(result)
 }

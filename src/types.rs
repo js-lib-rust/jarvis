@@ -4,6 +4,7 @@ use axum::body::Bytes;
 use axum::response::sse::Event;
 use futures::StreamExt;
 use futures::{TryStreamExt, stream::Stream};
+use log::{error, trace};
 use reqwest::Response;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -22,6 +23,9 @@ impl AppState {
         tool_url: &str,
         model_url: &str,
     ) -> Result<Arc<AppState>> {
+        trace!(
+            "create(router_addr: &str, tool_url: &str, model_url: &str,) -> Result<Arc<AppState>>"
+        );
         let router_client = RouterClient::connect(router_addr).await?;
         let tool_client = ToolClient::connect(tool_url).await?;
         let http_client = reqwest::Client::new();
@@ -32,6 +36,13 @@ impl AppState {
             http_client,
             model_url,
         }))
+    }
+
+    pub(crate) async fn dispose(&self) {
+        trace!("fn dispose(&self)");
+        if let Err(error) = self.router_client.shutdown().await {
+            error!("Fail to shutdown router client: {}", error);
+        }
     }
 }
 

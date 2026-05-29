@@ -53,7 +53,7 @@ enum ControlMessage {
         // response channel is used to convey server response message back to client
         response_channel_sender: oneshot::Sender<TcpMessage>,
     },
-    _Shutdown,
+    Shutdown,
 }
 
 /// The public handle used by the rest of the application.
@@ -98,9 +98,9 @@ impl RouterClient {
     }
 
     /// Shuts down the background connection manager.
-    pub async fn _shutdown(&self) -> Result<()> {
+    pub async fn shutdown(&self) -> Result<()> {
         self.control_channel_sender
-            .send(ControlMessage::_Shutdown)
+            .send(ControlMessage::Shutdown)
             .await
             .map_err(|e| AppError::Fatal(format!("Background worker died: {}", e)))
     }
@@ -209,8 +209,9 @@ impl TcpConnection {
                 self.response_channel_sender = Some(response_channel_sender);
             }
 
-            ControlMessage::_Shutdown => {
+            ControlMessage::Shutdown => {
                 info!("Shutdown command received. Closing connection...");
+                return Err(AppError::Fatal("Shutdown".into()));
             }
         }
         Ok(())
