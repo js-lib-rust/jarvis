@@ -1,9 +1,9 @@
+use crate::llm::RouterResponse;
 use crate::types::ByteStream;
 use crate::util::string::ellipsis;
 use crate::{
     error::AppError,
     llm::LlmRequest,
-    llm::RouterMessage,
     proc::Interpreter,
     types::{AppState, Result, StringStream},
 };
@@ -88,27 +88,12 @@ async fn post_chat_completions(
 
     if let Some(prompt) = request.get_routable_prompt() {
         debug!("prompt: {}", ellipsis(prompt, 100));
-        match get_routing(app_state.clone(), &prompt).await? {
-            RouterMessage::Response {
-                text,
-                confidence,
-                duration,
-            } if confidence > 0.98 => {
-                debug!("text: {text}, confidence: {confidence}, duration: {duration}");
-                let mut interpreter = Interpreter::new(&app_state.tool_client);
-                let string_stream = interpreter.eval(&text).await;
-                return Ok(ChatResponse::from(string_stream));
-            }
-            RouterMessage::Response {
-                confidence,
-                duration,
-                ..
-            } => {
-                debug!("confidence: {confidence}, duration: {duration}");
-            }
-            _ => {
-                trace!("Routing returned a non-response variant");
-            }
+        let routing = get_routing(app_state.clone(), &prompt).await?;
+        debug!("text: {}, confidence: {}", routing.text, routing.confidence);
+        if routing.confidence > 0.98 {
+            let mut interpreter = Interpreter::new(&app_state.tool_client);
+            let string_stream = interpreter.eval(&routing.text).await;
+            return Ok(ChatResponse::from(string_stream));
         }
     }
 
@@ -134,9 +119,9 @@ async fn post_chat_completions(
 
 // UTILS
 
-async fn get_routing(app_context: Arc<AppState>, prompt: &str) -> Result<RouterMessage> {
+async fn get_routing(app_context: Arc<AppState>, prompt: &str) -> Result<RouterResponse> {
     trace!("get_routing(app_context: Arc<AppContext>, prompt: &str) -> llm_router::Message");
-    app_context.router_client.request(prompt).await
+    app_context.router_client.get_routing(prompt).await
 }
 
 fn _router_report(prompt: &str, response: &str, confidence: f32, duration: f32) -> Result<String> {

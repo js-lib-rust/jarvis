@@ -1,20 +1,23 @@
 use crate::error::AppError;
+use crate::llm::RouterResponse;
 use crate::types::Result;
-use log::debug;
+use log::{debug, error, info, trace, warn};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{self, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{interval, timeout};
 
+/// The public message format used for communication.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type", rename_all = "lowercase")]
-pub enum RouterMessage {
+enum TcpMessage {
     Ping,
     Pong,
     Request {
-        payload: serde_json::Value,
+        payload: Value,
     },
     Response {
         text: String,
@@ -23,118 +26,242 @@ pub enum RouterMessage {
     },
 }
 
-#[derive(Clone, Debug)]
-pub struct RouterClient {
-    cmd_tx: mpsc::Sender<ClientCommand>,
+impl Into<Result<RouterResponse>> for TcpMessage {
+    fn into(self) -> Result<RouterResponse> {
+        match self {
+            TcpMessage::Response {
+                text, confidence, ..
+            } => Ok(RouterResponse { text, confidence }),
+            _ => Err(AppError::Fatal(
+                "Only TCP response message can be converted into router response.".to_string(),
+            )),
+        }
+    }
 }
 
+/// Internal command type used to send instructions to the background worker.
 #[derive(Debug)]
-enum ClientCommand {
+enum ControlMessage {
     Send {
-        request: RouterMessage,
-        resp_tx: oneshot::Sender<RouterMessage>,
+        request: TcpMessage,
+        // sender end of the oneshot response channel between TCP connection manager thread and client thread
+        // response channel is used to convey server response messsage back to client
+        response_channel_sender: oneshot::Sender<TcpMessage>,
     },
+    _Shutdown,
+}
+
+/// The public handle used by the rest of the application.
+/// It is cheap to clone and can be passed around easily.
+#[derive(Clone, Debug)]
+pub(crate) struct RouterClient {
+    control_channel_sender: mpsc::Sender<ControlMessage>,
 }
 
 impl RouterClient {
-    pub async fn connect(addr: &str) -> Result<Self> {
-        let stream = TcpStream::connect(addr).await?;
-        let (mut reader, mut writer) = tokio::io::split(stream);
-        let (cmd_tx, mut cmd_rx) = mpsc::channel::<ClientCommand>(32);
+    /// Establishes a connection and starts a background manager that handles
+    /// automatic reconnections if the socket fails.
+    pub async fn connect(router_address: &str) -> Result<Self> {
+        let (control_sender, mut control_receiver) = mpsc::channel::<ControlMessage>(32);
 
+        // The Manager Loop: This lives for the entire duration of the application.
+        let router_address = router_address.to_string();
         tokio::spawn(async move {
-            let mut heartbeat_timer = interval(Duration::from_secs(10));
-            // use a single slot for the pending response because it's a dedicated connection
-            let mut pending_responder: Option<oneshot::Sender<RouterMessage>> = None;
+            let mut retry_interval = interval(Duration::from_secs(5));
 
             loop {
-                tokio::select! {
-                    // 1. Handle Heartbeats
-                    _ = heartbeat_timer.tick() => {
-                        let p = serde_json::to_vec(&RouterMessage::Ping).unwrap();
-                        let _ = writer.write_all(&(p.len() as u32).to_be_bytes()).await;
-                        let _ = writer.write_all(&p).await;
+                info!("Attempting to connect to {}...", router_address);
+
+                match TcpStream::connect(&router_address).await {
+                    Ok(stream) => {
+                        info!("Successfully connected to {}", router_address);
+                        let mut tcp_connection = TcpConnection::new(stream);
+                        tcp_connection.run(&mut control_receiver).await;
+                        warn!("Routing server connection lost. Reconnecting in 5 seconds...");
                     }
-
-                    // 2. Handle Outgoing Requests
-                    Some(cmd) = cmd_rx.recv() => {
-                        match cmd {
-                            ClientCommand::Send { request, resp_tx } => {
-                                // If there was a previous request still waiting, drop it (or error)
-                                if let Some(old) = pending_responder.take() {
-                                    let _ = old.send(RouterMessage::Response { text: "Error: Busy".into(), confidence: 1.0, duration: 0.0 });
-                                }
-
-                                let p = serde_json::to_vec(&request).unwrap();
-                                if writer.write_all(&(p.len() as u32).to_be_bytes()).await.is_ok() {
-                                    if writer.write_all(&p).await.is_ok() {
-                                        pending_responder = Some(resp_tx);
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // 3. Handle Incoming Messages
-                    res = read_next_msg(&mut reader) => {
-                        match res {
-                            Ok(msg) => {
-                                match msg {
-                                    RouterMessage::Pong => { /* Heartbeat acknowledged, do nothing */ }
-                                    RouterMessage::Request { .. } | RouterMessage::Response { .. } => {
-                                        // This is the response to our request!
-                                        if let Some(tx) = pending_responder.take() {
-                                            let _ = tx.send(msg);
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            Err(_) => break, // Connection closed
-                        }
+                    Err(e) => {
+                        error!("Connection failed: {}. Retrying...", e);
                     }
                 }
+
+                // Wait before the next reconnection attempt
+                retry_interval.tick().await;
             }
         });
 
-        Ok(RouterClient { cmd_tx })
+        Ok(Self {
+            control_channel_sender: control_sender,
+        })
     }
 
-    pub async fn request(&self, prompt: &str) -> Result<RouterMessage> {
-        let (tx, rx) = oneshot::channel();
+    /// Shuts down the background connection manager.
+    pub async fn _shutdown(&self) -> Result<()> {
+        self.control_channel_sender
+            .send(ControlMessage::_Shutdown)
+            .await
+            .map_err(|e| AppError::Fatal(format!("Background worker died: {}", e)))
+    }
 
+    /// Sends a request to the router and waits for a response.
+    /// This method handles the high-level logic of the request-response lifecycle.
+    pub async fn get_routing(&self, prompt: &str) -> Result<RouterResponse> {
+
+        let (response_channel_sender, response_channel_receiver) = oneshot::channel();
         let start = Instant::now();
-        let payload = serde_json::json!({"prompt": prompt});
-        let request = RouterMessage::Request { payload };
 
-        self.cmd_tx
-            .send(ClientCommand::Send {
+        #[derive(Serialize)]
+        struct Payload<'a> {
+            prompt: &'a str
+        }
+        let request = TcpMessage::Request {
+            payload: serde_json::to_value(Payload{prompt})?,
+        };
+
+        // Send the instruction to the background worker
+        self.control_channel_sender
+            .send(ControlMessage::Send {
                 request,
-                resp_tx: tx,
+                response_channel_sender,
             })
             .await
-            .map_err(|e| AppError::Fatal(e.to_string()))?;
+            .map_err(|e| AppError::Fatal(format!("Background worker died: {}", e)))?;
 
-        let result = timeout(Duration::from_secs(10), rx)
-            .await?
-            .map_err(|e| AppError::Fatal(e.to_string()));
+        // Wait for the response with a timeout
+        let response = timeout(Duration::from_secs(10), response_channel_receiver)
+            .await
+            .map_err(|_| AppError::Fatal("Request timed out".into()))?
+            .map_err(|e| AppError::Fatal(format!("Response channel closed: {}", e)))?;
+
         debug!(
-            "Routing processing time: {} msec.",
+            "Routing processing time: {} ms",
             start.elapsed().as_millis()
         );
-        result
+        response.into()
     }
 }
 
-// Helper function to handle the framing logic
-async fn read_next_msg(reader: &mut tokio::io::ReadHalf<TcpStream>) -> Result<RouterMessage> {
-    let mut len_bytes = [0u8; 4];
-    reader.read_exact(&mut len_bytes).await?;
-    let len = u32::from_be_bytes(len_bytes) as usize;
+/// Manages the active TCP connection and the protocol logic.
+struct TcpConnection {
+    // read half of the TCP stream with the router server
+    tcp_reader: ReadHalf<TcpStream>,
+    // write half of the TCP stream with the router serer
+    tcp_writer: WriteHalf<TcpStream>,
+    // sender end of the oneshot response channel between TCP connection manager thread and client thread
+    // response channel is used to convey server response messsage back to client
+    response_channel_sender: Option<oneshot::Sender<TcpMessage>>,
+}
 
-    let mut payload = vec![0u8; len];
-    reader.read_exact(&mut payload).await?;
+impl TcpConnection {
+    fn new(tcp_stream: TcpStream) -> Self {
+        let (tcp_reader, tcp_writer) = io::split(tcp_stream);
+        Self {
+            tcp_reader: tcp_reader,
+            tcp_writer,
+            response_channel_sender: None,
+        }
+    }
 
-    let msg = serde_json::from_slice(&payload)?;
-    Ok(msg)
+    /// The main event loop for the active connection.
+    async fn run(&mut self, control_channel_receiver: &mut mpsc::Receiver<ControlMessage>) {
+        let mut heartbeat_timer = interval(Duration::from_secs(10));
+
+        loop {
+            let result = tokio::select! {
+                _ = heartbeat_timer.tick() => self.on_heartbeat().await,
+                Some(control_messsage) = control_channel_receiver.recv() => self.on_control_message(control_messsage).await,
+                Ok(tcp_messsage) = self.read_tcp_message() => self.on_tcp_message(&tcp_messsage).await,
+            };
+            if let Err(error) = result {
+                error!("Fail on router processing: {}", error);
+                break;
+            }
+        }
+    }
+
+    async fn on_heartbeat(&mut self) -> Result<()> {
+        trace!("on_heartbeat(&mut self) -> Result<()>");
+        self.write_tcp_message(&TcpMessage::Ping).await
+    }
+
+    async fn on_control_message(&mut self, control_message: ControlMessage) -> Result<()> {
+        trace!("on_control_message(&mut self, control_message: ControlMessage) -> Result<()>");
+        debug!("control_message: {:?}", control_message);
+
+        match control_message {
+            ControlMessage::Send {
+                request,
+                response_channel_sender,
+            } => {
+                // if a previous request is still pending, notify it that we are busy
+                if let Some(old_response_channel_sender) = self.response_channel_sender.take() {
+                    let _ = old_response_channel_sender.send(TcpMessage::Response {
+                        text: "Error: Busy".into(),
+                        confidence: 0.0,
+                        duration: 0.0,
+                    });
+                }
+
+                self.write_tcp_message(&request).await?;
+                self.response_channel_sender = Some(response_channel_sender);
+            }
+
+            ControlMessage::_Shutdown => {
+                info!("Shutdown command received. Closing connection...");
+            }
+        }
+        Ok(())
+    }
+
+    async fn on_tcp_message(&mut self, tcp_message: &TcpMessage) -> Result<()> {
+        trace!("on_tcp_message(&mut self, tcp_message: &TcpMessage) -> Result<()>");
+        debug!("tcp_message: {:?}", tcp_message);
+
+        let _ = match tcp_message {
+            TcpMessage::Pong => (), // heartbeat acknowledged, do nothing
+
+            TcpMessage::Response { .. } => {
+                if let Some(response_channel_sender) = self.response_channel_sender.take() {
+                    let _ = response_channel_sender.send(tcp_message.clone());
+                }
+            }
+
+            _ => {
+                return Err(AppError::Fatal(
+                    "Unexpected TCP response message.".to_string(),
+                ));
+            }
+        };
+        Ok(())
+    }
+
+    /// Writes a length-prefixed JSON message to the stream.
+    async fn write_tcp_message(&mut self, tcp_message: &TcpMessage) -> Result<()> {
+        trace!("write_tcp_message(&mut self, tcp_message: &TcpMessage) -> Result<()>");
+        debug!("tcp_message: {:?}", tcp_message);
+
+        let json = serde_json::to_vec(tcp_message)?;
+        let json_length = json.len() as u32;
+
+        self.tcp_writer.write_all(&json_length.to_be_bytes()).await?;
+        self.tcp_writer.write_all(&json).await?;
+        self.tcp_writer.flush().await?;
+        Ok(())
+    }
+
+    /// Reads a length-prefixed JSON message from the stream.
+    async fn read_tcp_message(&mut self) -> Result<TcpMessage> {
+        trace!("read_tcp_message(&mut self) -> Result<TcpMessage>");
+
+        let mut json_length_buffer = [0u8; 4];
+        self.tcp_reader
+            .read_exact(&mut json_length_buffer)
+            .await?;
+        let json_length = u32::from_be_bytes(json_length_buffer) as usize;
+
+        let mut json_buffer = vec![0u8; json_length];
+        self.tcp_reader.read_exact(&mut json_buffer).await?;
+
+        let message = serde_json::from_slice(&json_buffer)?;
+        Ok(message)
+    }
 }
