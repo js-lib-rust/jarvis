@@ -87,8 +87,8 @@ impl RouterClient {
                             }
                             _ => {
                                 warn!(
-                                    "Routing server connection lost. Reconnecting in {:?}...",
-                                    CONNECTION_RETRY_DELAY
+                                    "Routing server connection lost. Reconnecting in {}...",
+                                    CONNECTION_RETRY_DELAY.as_secs()
                                 );
                             }
                         }
