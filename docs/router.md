@@ -1,152 +1,234 @@
 # Router Module
 
-The router module provides a client implementation for communicating with a remote LLM routing server over TCP. It handles automatic reconnections and manages the request-response lifecycle through a background connection manager.
+The router module provides a client for communicating with a remote LLM routing server over a persistent TCP connection. Given a user prompt, the routing server quickly classifies it and returns the name of the appropriate downstream service along with a confidence score — allowing the application to dispatch the request without invoking a full large language model.
+
+## Key Characteristics
+
+| Property | Value |
+|---|---|
+| Transport | TCP, length-prefixed JSON frames |
+| Connection | Persistent, automatic reconnect on loss |
+| Concurrency | Single request in flight at a time |
+| Request timeout | 2 seconds (covers full round-trip) |
+| Reconnect delay | 4 seconds |
+| Expected latency | < 100 ms (miss), < 1 s (match) |
 
 ## Class Diagram
 
 ```mermaid
 classDiagram
-    class RouterResponse {
-        <<struct>>
-        +text: String
-        +confidence: f32
+
+    %% ── Public API ─────────────────────────────────────────────────────────────
+
+    class RouterClient {
+        -control_channel_sender : mpsc::Sender~ControlMessage~
+        -get_routing_semaphore  : Arc~Semaphore~
+        +connect(router_address: &str)$ RouterClient
+        +shutdown()
+        +get_routing(prompt: &str) RouterResponse
+        -do_routing(prompt: &str) RouterResponse
     }
 
-    class TcpMessage {
-        <<enumeration>>
-        Ping
-        Pong
-        Request(prompt: String)
-        Response(text: String, confidence: f32, duration: f32)
+    class RouterResponse {
+        <<struct>>
+        +text       : String
+        +confidence : f32
     }
+
+    %% ── Internal connection manager ────────────────────────────────────────────
+
+    class TcpConnection {
+        -tcp_reader              : ReadHalf~TcpStream~
+        -tcp_writer              : WriteHalf~TcpStream~
+        -response_channel_sender : Option~Sender~TcpResponse~~
+        +new(tcp_stream: TcpStream)$ TcpConnection
+        -run(control_channel_receiver: Receiver~ControlMessage~)
+        -on_heartbeat()
+        -on_control_message(control_message: ControlMessage)
+        -on_tcp_message(tcp_response: TcpResponse)
+        -write_tcp_message(tcp_request: TcpRequest)
+        -read_tcp_message() TcpResponse
+    }
+
+    %% ── Internal message types ─────────────────────────────────────────────────
 
     class ControlMessage {
         <<enumeration>>
-        Send(request: TcpMessage, response_channel_sender: oneshot::Sender~TcpMessage~)
+        Send~TcpRequest, Sender~TcpResponse~~
         Shutdown
     }
 
-    class RouterClient {
-        -control_channel_sender: mpsc::Sender~ControlMessage~
-        +connect(router_address: &str) Result~Self~
-        +request(prompt: &str) Result~RouterResponse~
+    class TcpRequest {
+        <<enumeration>>
+        Ping
+        Request~payload: Value~
     }
 
-    class TcpConnection {
-        -tcp_reader: ReadHalf~TcpStream~
-        -tcp_writer: WriteHalf~TcpStream~
-        -response_channel_sender: Option~oneshot::Sender~TcpMessage~~
-        +new(tcp_stream: TcpStream) TcpConnection
-        ~run(control_channel_receiver: &mut mpsc::Receiver~ControlMessage~) Result~()~
-        ~on_heartbeat() Result~()~
-        ~on_control_message(control_message: ControlMessage) Result~()~
-        ~on_tcp_message(tcp_message: &TcpMessage) Result~()~
-        ~write_tcp_message(tcp_message: &TcpMessage) Result~()~
-        ~read_tcp_message() Result~TcpMessage~
+    class TcpResponse {
+        <<enumeration>>
+        Pong
+        Response~text: String, confidence: f32~
     }
 
-    class MpscChannel {
-        <<interface>>
-        +send(msg: T)
-        +recv() T
+    %% ── Channels (synthetic — tokio library types) ─────────────────────────────
+
+    class ControlChannel {
+        <<mpsc>>
+        +send(msg: ControlMessage)
+        +recv() ControlMessage
     }
 
-    class OneshotChannel {
-        <<interface>>
-        +send(val: T)
-        +recv() T
+    class ResponseChannel {
+        <<oneshot>>
+        +send(msg: TcpResponse)
+        +recv() TcpResponse
     }
 
-    %% Relationships
-    RouterClient --> MpscChannel : uses (control_channel_sender)
-    TcpConnection --> MpscChannel : uses (control_channel_receiver)
-    RouterClient ..> OneshotChannel : creates (for request)
-    TcpConnection ..> OneshotChannel : uses (response_channel_sender)
-    
-    RouterClient ..> ControlMessage : sends
-    RouterClient ..> TcpMessage : uses
-    RouterClient --> TcpConnection : manages (via background task)
-    TcpConnection ..> ControlMessage : processes
-    TcpConnection ..> TcpMessage : sends/receives
-    TcpMessage ..> RouterResponse : converts to
+    %% ── Relationships ──────────────────────────────────────────────────────────
+
+    RouterClient "1" *-- "1" TcpConnection : spawns and owns
+    RouterClient ..> RouterResponse        : returns
+    RouterClient --> ControlChannel        : sends into (Sender end)
+
+    TcpConnection --> ControlChannel       : receives from (Receiver end)
+    TcpConnection ..> TcpRequest           : writes to TCP wire
+    TcpConnection ..> TcpResponse          : reads from TCP wire
+    TcpConnection --> ResponseChannel      : sends into (Sender end, stored per request)
+
+    RouterClient --> ResponseChannel       : receives from (Receiver end, per do_routing call)
+
+    TcpResponse ..> RouterResponse         : TryFrom conversion
+
+    ControlMessage ..> TcpRequest          : carries in Send variant
+    ControlMessage ..> ResponseChannel     : carries Sender in Send variant
 ```
 
-## Sequence Flow
+## Sequence Diagrams
 
 ### Connection Establishment
-The `connect` method starts a background task that handles the connection loop and automatic retries.
+
+`connect()` is called once at startup. It creates the control channel, spawns the background connection manager, and returns immediately. The manager loop runs for the lifetime of the application, reconnecting automatically whenever the TCP connection is lost.
 
 ```mermaid
 sequenceDiagram
     participant App as Application
     participant Client as RouterClient
-    participant Mpsc as MpscChannel (Control)
-    participant Manager as TcpConnection (Background Task)
-    participant Server as Remote Router Server
+    participant CC as ControlChannel (mpsc)
+    participant Manager as TcpConnection (background task)
+    participant Server as Router Server
 
     App->>Client: connect(router_address)
     activate Client
-    Client->>Mpsc: create channel
-    Client->>Manager: spawn background task
-    Client-->>App: return RouterClient
+    Client->>CC: create channel (capacity 32)
+    Client->>Manager: tokio::spawn background loop
+    Client-->>App: RouterClient handle
     deactivate Client
 
-    Note over Manager, Server: Background Loop
-    loop Every 5 seconds (if connection lost)
+    loop on connection loss — retry every 4 s
         Manager->>Server: TCP connect(router_address)
-        alt success
-            Server-->>Manager: established connection
+        alt connection established
+            Server-->>Manager: TCP stream
             Manager->>Manager: run() event loop
-        else failure
-            Manager->>Manager: retry after interval
+        else connection failed
+            Manager->>Manager: sleep 4 s, retry
         end
     end
 ```
 
 ### Request Lifecycle
-The following sequence diagram illustrates the flow of a single request from the `RouterClient` to the remote server and back.
+
+Each call to `get_routing()` must complete within 2 seconds. A semaphore ensures only one request is in flight at a time — concurrent callers receive an immediate error rather than silently queuing. The response channel is a one-shot: created per request, passed through the control channel inside the `Send` command, and consumed exactly once when the TCP response arrives.
 
 ```mermaid
 sequenceDiagram
     participant App as Application
     participant Client as RouterClient
-    participant Mpsc as MpscChannel (Control)
-    participant Manager as TcpConnection (Background Task)
-    participant Oneshot as OneshotChannel (Response)
-    participant Server as Remote Router Server
+    participant CC as ControlChannel (mpsc)
+    participant RC as ResponseChannel (oneshot)
+    participant Manager as TcpConnection (background task)
+    participant Server as Router Server
 
-    App->>Client: request(prompt)
+    App->>Client: get_routing(prompt)
     activate Client
-    Client->>Oneshot: create channel
-    Client->>Mpsc: send(ControlMessage::Send { request, oneshot_sender })
-    activate Mpsc
-    deactivate Mpsc
-    
-    Mpsc-->>Manager: recv(ControlMessage)
-    activate Manager
-    Manager->>Server: write_tcp_message(TcpMessage::Request)
-    Manager->>Oneshot: send(TcpMessage::Response)
-    deactivate Manager
-    
-    Server-->>Manager: read_tcp_message(TcpMessage::Response)
-    activate Manager
-    Manager->>Oneshot: send(TcpMessage::Response)
-    deactivate Manager
-    
-    Oneshot-->>Client: recv(TcpMessage::Response)
-    Client->>Client: convert to RouterResponse
-    Client-->>App: return RouterResponse
+
+    alt semaphore already taken
+        Client-->>App: Err — Router is busy
+    else permit acquired
+        Client->>RC: create one-shot channel
+        Client->>CC: send ControlMessage::Send { TcpRequest, RC sender }
+        Note right of Client: await RC receiver (2 s timeout)
+
+        CC-->>Manager: recv ControlMessage::Send
+        activate Manager
+        Manager->>Server: write TcpRequest::Request (length-prefixed JSON)
+        Manager->>Manager: store RC sender
+        deactivate Manager
+
+        Server-->>Manager: TcpResponse::Response (length-prefixed JSON)
+        activate Manager
+        Manager->>RC: send TcpResponse
+        deactivate Manager
+
+        RC-->>Client: TcpResponse
+        Client->>Client: TryFrom TcpResponse → RouterResponse
+        Client-->>App: Ok(RouterResponse)
+    end
+
     deactivate Client
 ```
 
-### Request Lifecycle:
-1.  **Application** calls `request()` on the `RouterClient`.
-2.  **`RouterClient`** creates a new `OneshotChannel` for the response.
-3.  **`RouterClient`** wraps the request in a `ControlMessage::Send` and sends it via the `MpscChannel`.
-4.  **`TcpConnection`** (running in a background task) receives the control message from the `MpscChannel`.
-5.  **`TcpConnection`** serializes the `TcpMessage::Request` and writes it to the **Remote Router Server** via the TCP stream.
-6.  **`TcpConnection`** stores the `OneshotChannel` sender.
-7.  **Remote Router Server** processes the prompt and sends back a `TcpMessage::Response`.
-8.  **`TcpConnection`** reads the response from the TCP stream.
-9.  **`TcpConnection`** uses the stored `OneshotChannel` sender to pass the `TcpMessage` back to the `RouterClient`.
-10. **`RouterClient`** receives the message, converts it into a `RouterResponse`, and returns it to the **Application**.
+### Heartbeat
+
+While idle, `TcpConnection` sends a `Ping` to the server every 10 seconds to keep the connection alive and detect silent drops early.
+
+```mermaid
+sequenceDiagram
+    participant Manager as TcpConnection (background task)
+    participant Server as Router Server
+
+    loop every 10 s
+        Manager->>Server: TcpRequest::Ping
+        Server-->>Manager: TcpResponse::Pong
+    end
+```
+
+### Shutdown
+
+```mermaid
+sequenceDiagram
+    participant App as Application
+    participant Client as RouterClient
+    participant CC as ControlChannel (mpsc)
+    participant Manager as TcpConnection (background task)
+
+    App->>Client: shutdown()
+    Client->>CC: send ControlMessage::Shutdown
+    CC-->>Manager: recv ControlMessage::Shutdown
+    Manager->>Manager: return Err(AppError::Shutdown)
+    Note over Manager: outer loop detects Shutdown,<br/>breaks without reconnecting
+```
+
+## Wire Protocol
+
+Messages are exchanged as **length-prefixed JSON frames**:
+
+```
+┌─────────────────┬──────────────────────────────┐
+│  4 bytes        │  N bytes                     │
+│  u32 big-endian │  UTF-8 JSON payload          │
+│  (length = N)   │                              │
+└─────────────────┴──────────────────────────────┘
+```
+
+The JSON uses a `"type"` discriminant field (lowercase variant name):
+
+```json
+// client → server
+{ "type": "ping" }
+{ "type": "request", "payload": { "prompt": "what is the weather?" } }
+
+// server → client
+{ "type": "pong" }
+{ "type": "response", "text": "weather", "confidence": 0.97 }
+```
+
