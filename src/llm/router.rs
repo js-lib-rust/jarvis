@@ -29,9 +29,11 @@ enum TcpMessage {
     },
 }
 
-impl Into<Result<RouterResponse>> for TcpMessage {
-    fn into(self) -> Result<RouterResponse> {
-        match self {
+impl TryFrom<TcpMessage> for RouterResponse {
+    type Error = AppError;
+
+    fn try_from(tcp_message: TcpMessage) -> std::prelude::v1::Result<Self, Self::Error> {
+        match tcp_message {
             TcpMessage::Response {
                 text, confidence, ..
             } => Ok(RouterResponse { text, confidence }),
@@ -136,7 +138,7 @@ impl RouterClient {
             "Routing processing time: {} ms",
             start.elapsed().as_millis()
         );
-        response.into()
+        RouterResponse::try_from(response)
     }
 }
 
