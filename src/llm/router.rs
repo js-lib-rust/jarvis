@@ -4,11 +4,11 @@ use crate::types::Result;
 use log::{debug, error, info, trace, warn};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, oneshot, Semaphore};
-use std::sync::Arc;
+use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio::time::{interval, sleep, timeout};
 
 // retry delay for TCP connection with router service
@@ -17,32 +17,32 @@ const CONNECTION_RETRY_DELAY: Duration = Duration::from_secs(4);
 // timeout for a single routing request (covers full TCP round-trip)
 const ROUTING_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// The public message format used for communication.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+/// Messages sent from client to server.
+#[derive(Serialize, Debug)]
 #[serde(tag = "type", rename_all = "lowercase")]
-enum TcpMessage {
+enum TcpRequest {
     Ping,
-    Pong,
-    Request {
-        payload: Value,
-    },
-    Response {
-        text: String,
-        confidence: f32,
-        duration: f32,
-    },
+    Request { payload: Value },
 }
 
-impl TryFrom<TcpMessage> for RouterResponse {
+/// Messages received from server to client.
+#[derive(Deserialize, Debug)]
+#[serde(tag = "type", rename_all = "lowercase")]
+enum TcpResponse {
+    Pong,
+    Response { text: String, confidence: f32 },
+}
+
+impl TryFrom<TcpResponse> for RouterResponse {
     type Error = AppError;
 
-    fn try_from(tcp_message: TcpMessage) -> Result<Self> {
-        match tcp_message {
-            TcpMessage::Response {
+    fn try_from(tcp_response: TcpResponse) -> Result<Self> {
+        match tcp_response {
+            TcpResponse::Response {
                 text, confidence, ..
             } => Ok(RouterResponse { text, confidence }),
-            _ => Err(AppError::Fatal(
-                "Only TCP response message can be converted into router response.".to_string(),
+            TcpResponse::Pong => Err(AppError::Fatal(
+                "Unexpected Pong on response channel".to_string(),
             )),
         }
     }
@@ -52,10 +52,10 @@ impl TryFrom<TcpMessage> for RouterResponse {
 #[derive(Debug)]
 enum ControlMessage {
     Send {
-        request: TcpMessage,
+        tcp_request: TcpRequest,
         // sender end of the oneshot response channel between TCP connection manager thread and client thread
         // response channel is used to convey server response message back to client
-        response_channel_sender: oneshot::Sender<TcpMessage>,
+        response_channel_sender: oneshot::Sender<TcpResponse>,
     },
     Shutdown,
 }
@@ -65,7 +65,7 @@ enum ControlMessage {
 #[derive(Clone, Debug)]
 pub(crate) struct RouterClient {
     control_channel_sender: mpsc::Sender<ControlMessage>,
-    semaphore: Arc<Semaphore>,
+    get_routing_semaphore: Arc<Semaphore>,
 }
 
 impl RouterClient {
@@ -109,7 +109,7 @@ impl RouterClient {
 
         Ok(Self {
             control_channel_sender: control_sender,
-            semaphore: Arc::new(Semaphore::new(1)),
+            get_routing_semaphore: Arc::new(Semaphore::new(1)),
         })
     }
 
@@ -126,12 +126,12 @@ impl RouterClient {
     pub async fn get_routing(&self, prompt: &str) -> Result<RouterResponse> {
         trace!("get_routing(&self, prompt: &str) -> Result<RouterResponse>");
 
-        let _permit = self.semaphore
+        let _permit = self
+            .get_routing_semaphore
             .try_acquire()
             .map_err(|_| AppError::Fatal("Router is busy".into()))?;
 
-        timeout(ROUTING_TIMEOUT, self.do_routing(prompt))
-            .await?
+        timeout(ROUTING_TIMEOUT, self.do_routing(prompt)).await?
     }
 
     async fn do_routing(&self, prompt: &str) -> Result<RouterResponse> {
@@ -143,14 +143,14 @@ impl RouterClient {
         struct Payload<'a> {
             prompt: &'a str,
         }
-        let request = TcpMessage::Request {
+        let request = TcpRequest::Request {
             payload: serde_json::to_value(Payload { prompt })?,
         };
 
         // Send the instruction to the background worker
         self.control_channel_sender
             .send(ControlMessage::Send {
-                request,
+                tcp_request: request,
                 response_channel_sender,
             })
             .await
@@ -176,7 +176,7 @@ struct TcpConnection {
     tcp_writer: WriteHalf<TcpStream>,
     // sender end of the oneshot response channel between TCP connection manager thread and client thread
     // response channel is used to convey server response message back to client
-    response_channel_sender: Option<oneshot::Sender<TcpMessage>>,
+    response_channel_sender: Option<oneshot::Sender<TcpResponse>>,
 }
 
 impl TcpConnection {
@@ -191,7 +191,10 @@ impl TcpConnection {
     }
 
     /// The main event loop for the active connection.
-    async fn run(&mut self, control_channel_receiver: &mut mpsc::Receiver<ControlMessage>) -> Result<()> {
+    async fn run(
+        &mut self,
+        control_channel_receiver: &mut mpsc::Receiver<ControlMessage>,
+    ) -> Result<()> {
         trace!("run(&mut self, control_channel_receiver: &mut mpsc::Receiver<ControlMessage>)");
         let mut heartbeat_timer = interval(Duration::from_secs(10));
 
@@ -199,7 +202,7 @@ impl TcpConnection {
             let result = tokio::select! {
                 _ = heartbeat_timer.tick() => self.on_heartbeat().await,
                 Some(control_message) = control_channel_receiver.recv() => self.on_control_message(control_message).await,
-                Ok(tcp_message) = self.read_tcp_message() => self.on_tcp_message(tcp_message).await,
+                Ok(tcp_response) = self.read_tcp_message() => self.on_tcp_message(tcp_response).await,
             };
             if let Err(e) = result {
                 if matches!(e, AppError::Shutdown) {
@@ -214,7 +217,7 @@ impl TcpConnection {
 
     async fn on_heartbeat(&mut self) -> Result<()> {
         trace!("on_heartbeat(&mut self) -> Result<()>");
-        self.write_tcp_message(&TcpMessage::Ping).await
+        self.write_tcp_message(&TcpRequest::Ping).await
     }
 
     async fn on_control_message(&mut self, control_message: ControlMessage) -> Result<()> {
@@ -223,7 +226,7 @@ impl TcpConnection {
 
         match control_message {
             ControlMessage::Send {
-                request,
+                tcp_request: request,
                 response_channel_sender,
             } => {
                 self.write_tcp_message(&request).await?;
@@ -238,34 +241,27 @@ impl TcpConnection {
         Ok(())
     }
 
-    async fn on_tcp_message(&mut self, tcp_message: TcpMessage) -> Result<()> {
-        trace!("on_tcp_message(&mut self, tcp_message: TcpMessage) -> Result<()>");
-        debug!("tcp_message: {:?}", tcp_message);
+    async fn on_tcp_message(&mut self, tcp_response: TcpResponse) -> Result<()> {
+        trace!("on_tcp_message(&mut self, tcp_response: TcpResponse) -> Result<()>");
+        debug!("tcp_response: {:?}", tcp_response);
 
-        match tcp_message {
-            TcpMessage::Pong => (), // heartbeat acknowledged, do nothing
-
-            TcpMessage::Response { .. } => {
+        match tcp_response {
+            TcpResponse::Pong => (), // heartbeat acknowledged, do nothing
+            TcpResponse::Response { .. } => {
                 if let Some(response_channel_sender) = self.response_channel_sender.take() {
-                    let _ = response_channel_sender.send(tcp_message);
+                    let _ = response_channel_sender.send(tcp_response);
                 }
-            }
-
-            _ => {
-                return Err(AppError::Fatal(
-                    "Unexpected TCP response message.".to_string(),
-                ));
             }
         };
         Ok(())
     }
 
     /// Writes a length-prefixed JSON message to the stream.
-    async fn write_tcp_message(&mut self, tcp_message: &TcpMessage) -> Result<()> {
-        trace!("write_tcp_message(&mut self, tcp_message: &TcpMessage) -> Result<()>");
-        debug!("tcp_message: {:?}", tcp_message);
+    async fn write_tcp_message(&mut self, tcp_request: &TcpRequest) -> Result<()> {
+        trace!("write_tcp_message(&mut self, tcp_request: &TcpRequest) -> Result<()>");
+        debug!("tcp_request: {:?}", tcp_request);
 
-        let json = serde_json::to_vec(tcp_message)?;
+        let json = serde_json::to_vec(tcp_request)?;
         let json_length = json.len() as u32;
 
         self.tcp_writer
@@ -277,8 +273,8 @@ impl TcpConnection {
     }
 
     /// Reads a length-prefixed JSON message from the stream.
-    async fn read_tcp_message(&mut self) -> Result<TcpMessage> {
-        trace!("read_tcp_message(&mut self) -> Result<TcpMessage>");
+    async fn read_tcp_message(&mut self) -> Result<TcpResponse> {
+        trace!("read_tcp_message(&mut self) -> Result<TcpResponse>");
 
         let mut json_length_buffer = [0u8; 4];
         self.tcp_reader.read_exact(&mut json_length_buffer).await?;
@@ -287,7 +283,7 @@ impl TcpConnection {
         let mut json_buffer = vec![0u8; json_length];
         self.tcp_reader.read_exact(&mut json_buffer).await?;
 
-        let message = serde_json::from_slice(&json_buffer)?;
-        Ok(message)
+        let response = serde_json::from_slice(&json_buffer)?;
+        Ok(response)
     }
 }
