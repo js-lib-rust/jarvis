@@ -10,7 +10,7 @@ use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{interval, sleep, timeout};
 
-// retry delay in seconds for TCP connection with router service 
+// retry delay in seconds for TCP connection with router service
 static CONNECTION_RETRY_DELAY: Duration = Duration::from_secs(4);
 
 /// The public message format used for communication.
@@ -32,7 +32,7 @@ enum TcpMessage {
 impl TryFrom<TcpMessage> for RouterResponse {
     type Error = AppError;
 
-    fn try_from(tcp_message: TcpMessage) -> std::prelude::v1::Result<Self, Self::Error> {
+    fn try_from(tcp_message: TcpMessage) -> Result<Self> {
         match tcp_message {
             TcpMessage::Response {
                 text, confidence, ..
@@ -80,8 +80,18 @@ impl RouterClient {
                     Ok(stream) => {
                         info!("Successfully connected to {}", router_address);
                         let mut tcp_connection = TcpConnection::new(stream);
-                        tcp_connection.run(&mut control_receiver).await;
-                        warn!("Routing server connection lost. Reconnecting in 5 seconds...");
+                        match tcp_connection.run(&mut control_receiver).await {
+                            Err(AppError::Shutdown) => {
+                                info!("Shutdown complete.");
+                                break;
+                            }
+                            _ => {
+                                warn!(
+                                    "Routing server connection lost. Reconnecting in {:?}...",
+                                    CONNECTION_RETRY_DELAY
+                                );
+                            }
+                        }
                     }
                     Err(e) => {
                         error!("Connection failed: {}. Retrying...", e);
@@ -165,7 +175,7 @@ impl TcpConnection {
     }
 
     /// The main event loop for the active connection.
-    async fn run(&mut self, control_channel_receiver: &mut mpsc::Receiver<ControlMessage>) {
+    async fn run(&mut self, control_channel_receiver: &mut mpsc::Receiver<ControlMessage>) -> Result<()> {
         trace!("run(&mut self, control_channel_receiver: &mut mpsc::Receiver<ControlMessage>)");
         let mut heartbeat_timer = interval(Duration::from_secs(10));
 
@@ -175,11 +185,15 @@ impl TcpConnection {
                 Some(control_message) = control_channel_receiver.recv() => self.on_control_message(control_message).await,
                 Ok(tcp_message) = self.read_tcp_message() => self.on_tcp_message(tcp_message).await,
             };
-            if let Err(error) = result {
-                error!("Fail on router processing: {}", error);
+            if let Err(e) = result {
+                if matches!(e, AppError::Shutdown) {
+                    return Err(e);
+                }
+                error!("Fail on router processing: {}", e);
                 break;
             }
         }
+        Ok(())
     }
 
     async fn on_heartbeat(&mut self) -> Result<()> {

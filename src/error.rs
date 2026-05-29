@@ -35,6 +35,10 @@ pub enum AppError {
 
     #[error("Fatal error: {0}")]
     Fatal(String),
+
+    #[allow(dead_code)]
+    #[error("Shutdown")]
+    Shutdown,
 }
 
 impl IntoResponse for AppError {
