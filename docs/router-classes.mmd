@@ -1,64 +1,85 @@
 classDiagram
-    class RouterResponse {
-        <<struct>>
-        +text: String
-        +confidence: f32
+
+    %% ── Public API ─────────────────────────────────────────────────────────────
+
+    class RouterClient {
+        -control_channel_sender : mpsc::Sender~ControlMessage~
+        -get_routing_semaphore  : Arc~Semaphore~
+        +connect(router_address: &str)$ RouterClient
+        +shutdown()
+        +get_routing(prompt: &str) RouterResponse
+        -do_routing(prompt: &str) RouterResponse
     }
 
-    class TcpMessage {
-        <<enumeration>>
-        Ping
-        Pong
-        Request(prompt: String)
-        Response(text: String, confidence: f32, duration: f32)
+    class RouterResponse {
+        <<struct>>
+        +text       : String
+        +confidence : f32
     }
+
+    %% ── Internal connection manager ────────────────────────────────────────────
+
+    class TcpConnection {
+        -tcp_reader              : ReadHalf~TcpStream~
+        -tcp_writer              : WriteHalf~TcpStream~
+        -response_channel_sender : Option~Sender~TcpResponse~~
+        +new(tcp_stream: TcpStream)$ TcpConnection
+        -run(control_channel_receiver: Receiver~ControlMessage~)
+        -on_heartbeat()
+        -on_control_message(control_message: ControlMessage)
+        -on_tcp_message(tcp_response: TcpResponse)
+        -write_tcp_message(tcp_request: TcpRequest)
+        -read_tcp_message() TcpResponse
+    }
+
+    %% ── Internal message types ─────────────────────────────────────────────────
 
     class ControlMessage {
         <<enumeration>>
-        Send(request: TcpMessage, response_channel_sender: oneshot::Sender~TcpMessage~)
+        Send~TcpRequest, Sender~TcpResponse~~
         Shutdown
     }
 
-    class RouterClient {
-        -control_channel_sender: mpsc::Sender~ControlMessage~
-        +connect(router_address: &str) Result~Self~
-        +request(prompt: &str) Result~RouterResponse~
+    class TcpRequest {
+        <<enumeration>>
+        Ping
+        Request~payload: Value~
     }
 
-    class TcpConnection {
-        -tcp_reader: ReadHalf~TcpStream~
-        -tcp_writer: WriteHalf~TcpStream~
-        -response_channel_sender: Option~oneshot::Sender~TcpMessage~~
-        +new(tcp_stream: TcpStream) TcpConnection
-        ~run(control_channel_receiver: &mut mpsc::Receiver~ControlMessage~) Result~()~
-        ~on_heartbeat() Result~()~
-        ~on_control_message(control_message: ControlMessage) Result~()~
-        ~on_tcp_message(tcp_message: &TcpMessage) Result~()~
-        ~write_tcp_message(tcp_message: &TcpMessage) Result~()~
-        ~read_tcp_message() Result~TcpMessage~
+    class TcpResponse {
+        <<enumeration>>
+        Pong
+        Response~text: String, confidence: f32~
     }
 
-    class MpscChannel {
-        <<interface>>
-        +send(msg: T)
-        +recv() T
+    %% ── Channels (synthetic — tokio library types) ─────────────────────────────
+
+    class ControlChannel {
+        <<mpsc>>
+        +send(msg: ControlMessage)
+        +recv() ControlMessage
     }
 
-    class OneshotChannel {
-        <<interface>>
-        +send(val: T)
-        +recv() T
+    class ResponseChannel {
+        <<oneshot>>
+        +send(msg: TcpResponse)
+        +recv() TcpResponse
     }
 
-    %% Relationships
-    RouterClient --> MpscChannel : uses (control_channel_sender)
-    TcpConnection --> MpscChannel : uses (control_channel_receiver)
-    RouterClient ..> OneshotChannel : creates (for request)
-    TcpConnection ..> OneshotChannel : uses (response_channel_sender)
-    
-    RouterClient ..> ControlMessage : sends
-    RouterClient ..> TcpMessage : uses
-    RouterClient --> TcpConnection : manages (via background task)
-    TcpConnection ..> ControlMessage : processes
-    TcpConnection ..> TcpMessage : sends/receives
-    TcpMessage ..> RouterResponse : converts to
+    %% ── Relationships ──────────────────────────────────────────────────────────
+
+    RouterClient "1" *-- "1" TcpConnection : spawns and owns
+    RouterClient ..> RouterResponse        : returns
+    RouterClient --> ControlChannel        : sends into (Sender end)
+
+    TcpConnection --> ControlChannel       : receives from (Receiver end)
+    TcpConnection ..> TcpRequest           : writes to TCP wire
+    TcpConnection ..> TcpResponse          : reads from TCP wire
+    TcpConnection --> ResponseChannel      : sends into (Sender end, stored per request)
+
+    RouterClient --> ResponseChannel       : receives from (Receiver end, per do_routing call)
+
+    TcpResponse ..> RouterResponse         : TryFrom conversion
+
+    ControlMessage ..> TcpRequest          : carries in Send variant
+    ControlMessage ..> ResponseChannel     : carries Sender in Send variant
