@@ -7,11 +7,15 @@ use serde_json::Value;
 use std::time::{Duration, Instant};
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Semaphore};
+use std::sync::Arc;
 use tokio::time::{interval, sleep, timeout};
 
-// retry delay in seconds for TCP connection with router service
-static CONNECTION_RETRY_DELAY: Duration = Duration::from_secs(4);
+// retry delay for TCP connection with router service
+const CONNECTION_RETRY_DELAY: Duration = Duration::from_secs(4);
+
+// timeout for a single routing request (covers full TCP round-trip)
+const ROUTING_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The public message format used for communication.
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -61,6 +65,7 @@ enum ControlMessage {
 #[derive(Clone, Debug)]
 pub(crate) struct RouterClient {
     control_channel_sender: mpsc::Sender<ControlMessage>,
+    semaphore: Arc<Semaphore>,
 }
 
 impl RouterClient {
@@ -104,6 +109,7 @@ impl RouterClient {
 
         Ok(Self {
             control_channel_sender: control_sender,
+            semaphore: Arc::new(Semaphore::new(1)),
         })
     }
 
@@ -116,9 +122,20 @@ impl RouterClient {
     }
 
     /// Sends a request to the router and waits for a response.
-    /// This method handles the high-level logic of the request-response lifecycle.
+    /// Rejects immediately if another request is already in flight.
     pub async fn get_routing(&self, prompt: &str) -> Result<RouterResponse> {
         trace!("get_routing(&self, prompt: &str) -> Result<RouterResponse>");
+
+        let _permit = self.semaphore
+            .try_acquire()
+            .map_err(|_| AppError::Fatal("Router is busy".into()))?;
+
+        timeout(ROUTING_TIMEOUT, self.do_routing(prompt))
+            .await?
+    }
+
+    async fn do_routing(&self, prompt: &str) -> Result<RouterResponse> {
+        trace!("do_routing(&self, prompt: &str) -> Result<RouterResponse>");
         let (response_channel_sender, response_channel_receiver) = oneshot::channel();
         let start = Instant::now();
 
@@ -139,9 +156,8 @@ impl RouterClient {
             .await
             .map_err(|e| AppError::Fatal(format!("Background worker died: {}", e)))?;
 
-        // Wait for the response with a timeout
-        let response = timeout(Duration::from_secs(10), response_channel_receiver)
-            .await?
+        let response = response_channel_receiver
+            .await
             .map_err(|e| AppError::Fatal(format!("Response channel closed: {}", e)))?;
 
         debug!(
@@ -210,22 +226,13 @@ impl TcpConnection {
                 request,
                 response_channel_sender,
             } => {
-                // if a previous request is still pending, notify it that we are busy
-                if let Some(old_response_channel_sender) = self.response_channel_sender.take() {
-                    let _ = old_response_channel_sender.send(TcpMessage::Response {
-                        text: "Error: Busy".into(),
-                        confidence: 0.0,
-                        duration: 0.0,
-                    });
-                }
-
                 self.write_tcp_message(&request).await?;
                 self.response_channel_sender = Some(response_channel_sender);
             }
 
             ControlMessage::Shutdown => {
                 info!("Shutdown command received. Closing connection...");
-                return Err(AppError::Fatal("Shutdown".into()));
+                return Err(AppError::Shutdown);
             }
         }
         Ok(())
