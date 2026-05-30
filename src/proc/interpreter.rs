@@ -1,7 +1,9 @@
-use crate::agent::context::{MeasurementUnitAgent, TimeServiceAgent, UserProfileAgent};
 use crate::agent::hera::HeraAgent;
 use crate::agent::printer::PrinterAgent;
 use crate::agent::query::QueryAgent;
+use crate::agent::time::TimeServiceAgent;
+use crate::agent::units::MeasurementUnitAgent;
+use crate::agent::user::UserProfileAgent;
 use crate::agent::weather::WeatherAgent;
 use crate::llm::ToolClient;
 use crate::proc::stack::FactsStack;
