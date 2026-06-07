@@ -90,7 +90,7 @@ async fn post_chat_completions(
         debug!("prompt: {}", ellipsis(prompt, 100));
         let routing = get_routing(app_state.clone(), &prompt).await?;
         debug!("text: {}, confidence: {}", routing.text, routing.confidence);
-        if routing.confidence > 0.98 {
+        if routing.confidence > 0.96 {
             let mut interpreter = Interpreter::new(&app_state.tool_client);
             let string_stream = interpreter.eval(&routing.text).await;
             return Ok(ChatResponse::from(string_stream));

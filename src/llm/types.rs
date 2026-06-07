@@ -157,3 +157,8 @@ impl LlmModels {
         }
     }
 }
+
+pub(crate) struct RouterResponse {
+    pub(crate) text: String,
+    pub(crate) confidence: f32,
+}

@@ -63,7 +63,7 @@ impl <'a> Interpreter<'a> {
             debug!("facts: {:?}", facts_stack.facts);
             let result: Option<String> = match action.agent {
                 "time-service" => TimeServiceAgent::new().exec(&request).ok(),
-                "user-profile" => UserProfileAgent::new().exec(&request).await.ok(),
+                "user-profile" => UserProfileAgent::new(self.tool_client).exec(&request).await.ok(),
                 "measure-units" => MeasurementUnitAgent::new().exec(&request).ok(),
                 "health" => HealthAgent::new(self.tool_client).exec(&mut request).await.ok(),
                 "weather" => WeatherAgent::new(self.tool_client).exec(&mut request).await.ok(),

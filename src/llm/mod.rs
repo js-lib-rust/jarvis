@@ -13,10 +13,7 @@ pub(crate) use types::LlmModelData;
 pub(crate) use types::LlmModels;
 pub(crate) use types::LlmRequest;
 
+pub(crate) use types::RouterResponse;
+
 pub(crate) use slm::SlmClient;
 pub(crate) use slm::SlmRequest;
-
-pub(crate) struct RouterResponse {
-    pub(crate) text: String,
-    pub(crate) confidence: f32,
-}

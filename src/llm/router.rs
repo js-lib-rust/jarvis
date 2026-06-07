@@ -30,7 +30,12 @@ enum TcpRequest {
 #[serde(tag = "type", rename_all = "lowercase")]
 enum TcpResponse {
     Pong,
-    Response { text: String, confidence: f32 },
+    Response {
+        estimated_confidence: f32,
+        confidence: f32,
+        text: String,
+        processing_time: f32,
+    },
 }
 
 impl TryFrom<TcpResponse> for RouterResponse {
@@ -39,8 +44,18 @@ impl TryFrom<TcpResponse> for RouterResponse {
     fn try_from(tcp_response: TcpResponse) -> Result<Self> {
         match tcp_response {
             TcpResponse::Response {
-                text, confidence, ..
-            } => Ok(RouterResponse { text, confidence }),
+                estimated_confidence,
+                confidence,
+                text,
+                processing_time,
+            } => {
+                debug!("estimated_confidence: {}", estimated_confidence);
+                debug!("confidence: {}", confidence);
+                debug!("text: {}", text);
+                debug!("processing_time: {}", processing_time);
+                Ok(RouterResponse { text, confidence })
+            }
+
             TcpResponse::Pong => Err(AppError::Fatal(
                 "Unexpected Pong on response channel".to_string(),
             )),
