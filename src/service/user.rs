@@ -1,20 +1,32 @@
-use crate::service::Property;
-use crate::types::Result;
+use crate::{service::Property, types::Result};
 use crate::util::string::snake_case;
 use bson::DateTime;
 use futures::{StreamExt, future::ready, stream::TryStreamExt};
 use log::{debug, trace};
-use mongodb::{
-    Client,
-    bson::doc,
-    options::{DeleteOptions, FindOneOptions, FindOptions},
-};
+use mongodb::Collection;
+use mongodb::{Client, bson::doc};
 use serde::Deserialize;
-use std::{fmt, vec};
+use std::fmt;
+use tokio::sync::OnceCell;
 
-const SERVER: &'static str = "mongodb://localhost:27017";
-const DATABASE: &'static str = "jarvis";
-const COLLECTION: &'static str = "user_profile";
+const SERVER: &str = "mongodb://localhost:27017";
+const DATABASE: &str = "jarvis";
+const COLLECTION: &str = "user_profile";
+
+static MONGO_CLIENT: OnceCell<Client> = OnceCell::const_new();
+static MONGO_COLLECTION: OnceCell<Collection<Property>> = OnceCell::const_new();
+
+async fn collection() -> Result<&'static Collection<Property>> {
+    let client = MONGO_CLIENT
+        .get_or_try_init(|| async { Client::with_uri_str(SERVER).await })
+        .await?;
+
+    let collection = MONGO_COLLECTION
+        .get_or_init(|| async { client.database(DATABASE).collection::<Property>(COLLECTION) })
+        .await;
+
+    Ok(collection)
+}
 
 #[derive(Deserialize, Debug)]
 #[serde(untagged)]
@@ -47,18 +59,14 @@ impl SetProperty {
         debug!("property: {}", self.property);
         debug!("value: {:?}", self.value);
 
-        let client = Client::with_uri_str(SERVER).await?;
-        let database = client.database(DATABASE);
-        let collection = database.collection::<Property>(COLLECTION);
-
         let property = Property::new(
             &self.username,
             &snake_case(&self.property),
             &self.value.to_string(),
         );
-        let _ = collection.insert_one(property, None).await;
 
-        Ok(String::new())
+        collection().await?.insert_one(&property, None).await?;
+        Ok(serde_json::to_string(&property)?)
     }
 }
 
@@ -76,17 +84,13 @@ impl UpdateProperty {
         debug!("property: {}", self.property);
         debug!("value: {}", self.value);
 
-        let client = Client::with_uri_str(SERVER).await?;
-        let database = client.database(DATABASE);
-        let collection = database.collection::<Property>(COLLECTION);
-
-        let query = doc! {"property": &snake_case(&self.property)};
+        let query = doc! {"username": &self.username, "property": &snake_case(&self.property)};
         let update = doc! {"$set": {
             "value": &self.value,
             "updated_timestamp": DateTime::now(),
         }};
 
-        let result = collection.update_one(query, update, None).await?;
+        let result = collection().await?.update_one(query, update, None).await?;
         if result.matched_count == 0 {
             return Ok(format!(
                 "User {} property {} not found.",
@@ -100,7 +104,7 @@ impl UpdateProperty {
             ));
         }
         Ok(format!(
-            "User {} property {} upated to {}.",
+            "User {} property {} updated to {}.",
             self.username, self.property, self.value
         ))
     }
@@ -120,17 +124,13 @@ impl RenameProperty {
         debug!("old_property: {}", self.old_property);
         debug!("new_property: {}", self.new_property);
 
-        let client = Client::with_uri_str(SERVER).await?;
-        let database = client.database(DATABASE);
-        let collection = database.collection::<Property>(COLLECTION);
-
-        let query = doc! {"property": &snake_case(&self.old_property)};
+        let query = doc! {"username": &self.username, "property": &snake_case(&self.old_property)};
         let update = doc! {"$set": {
             "property": &snake_case(&self.new_property),
             "updated_timestamp": DateTime::now(),
         }};
 
-        let result = collection.update_one(query, update, None).await?;
+        let result = collection().await?.update_one(query, update, None).await?;
         if result.matched_count == 0 {
             return Ok(format!(
                 "User {} property {} not found.",
@@ -162,15 +162,10 @@ impl RemoveProperty {
         debug!("username: {}", self.username);
         debug!("property: {}", self.property);
 
-        let client = Client::with_uri_str(SERVER).await?;
-        let database = client.database(DATABASE);
-        let collection = database.collection::<Property>(COLLECTION);
-
         // AND operator is implicit when filter contains multiple fields
         let filter = doc! {"username": &self.username, "property": &snake_case(&self.property)};
-        let options = DeleteOptions::builder().build();
+        let result = collection().await?.delete_one(filter, None).await?;
 
-        let result = collection.delete_one(filter, options).await?;
         Ok(if result.deleted_count == 1 {
             format!("User {} property {} deleted.", self.username, self.property)
         } else {
@@ -194,21 +189,15 @@ impl GetProperty {
         debug!("username: {}", self.username);
         debug!("property: {}", self.property);
 
-        let client = Client::with_uri_str(SERVER).await?;
-        let database = client.database(DATABASE);
-        let collection = database.collection::<Property>(COLLECTION);
-
-        let filter = doc! {"$and": [
-            {"username": &self.username},
-            {"property": &snake_case(&self.property)}
-        ]};
-        let options = FindOneOptions::builder().build();
-
+        let filter = doc! {"username": &self.username, "property": &snake_case(&self.property)};
         Ok(
-            if let Some(mut property) = collection.find_one(filter, options).await? {
+            if let Some(mut property) = collection().await?.find_one(filter, None).await? {
                 property.json()
             } else {
-                format!("User property {} not found.", self.property)
+                format!(
+                    "User {} property {} not found.",
+                    self.username, self.property
+                )
             },
         )
     }
@@ -224,16 +213,12 @@ impl ListProperties {
         trace!("ListProperties::exec(&self) -> Result<String>");
         debug!("username: {}", self.username);
 
-        let client = Client::with_uri_str(SERVER).await?;
-        let database = client.database(DATABASE);
-        let collection = database.collection::<Property>(COLLECTION);
-
         let filter = doc! {"username": &self.username};
-        let options = FindOptions::builder().build();
-
-        let properties = collection
-            .find(filter, options)
+        let properties = collection()
             .await?
+            .find(filter, None)
+            .await?
+            // this function is designed for best effort so we can silently ignore deserialization errors
             .filter_map(|result| ready(result.ok()))
             .map(|property| serde_json::to_string(&property))
             .try_collect::<Vec<String>>()
