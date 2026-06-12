@@ -1,4 +1,3 @@
-use crate::llm::RouterResponse;
 use crate::types::ByteStream;
 use crate::util::string::ellipsis;
 use crate::{
@@ -88,7 +87,7 @@ async fn post_chat_completions(
 
     if let Some(prompt) = request.get_routable_prompt() {
         debug!("prompt: {}", ellipsis(prompt, 100));
-        let routing = get_routing(app_state.clone(), &prompt).await?;
+        let routing = app_state.router_client.get_routing(&prompt).await?;
         debug!("text: {}, confidence: {}", routing.text, routing.confidence);
         if routing.confidence > 0.96 {
             let mut interpreter = Interpreter::new(&app_state.tool_client);
@@ -118,11 +117,6 @@ async fn post_chat_completions(
 }
 
 // UTILS
-
-async fn get_routing(app_context: Arc<AppState>, prompt: &str) -> Result<RouterResponse> {
-    trace!("get_routing(app_context: Arc<AppContext>, prompt: &str) -> llm_router::Message");
-    app_context.router_client.get_routing(prompt).await
-}
 
 fn _router_report(prompt: &str, response: &str, confidence: f32, duration: f32) -> Result<String> {
     trace!(
