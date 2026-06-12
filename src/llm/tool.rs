@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::error::AppError;
 use crate::llm::{SlmClient, SlmRequest};
@@ -9,6 +9,8 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
+const KEEP_IT_FOREVER: Duration = Duration::from_secs(28440);
+
 #[derive(Debug)]
 pub(crate) struct ToolClient {
     tool_url: String,
@@ -17,7 +19,9 @@ pub(crate) struct ToolClient {
 
 impl ToolClient {
     pub async fn connect(addr: &str) -> Result<Self> {
-        let http_client = reqwest::Client::new();
+        let http_client = reqwest::Client::builder()
+            .pool_idle_timeout(KEEP_IT_FOREVER)
+            .build()?;
         Ok(Self {
             tool_url: addr.to_string(),
             http_client,
