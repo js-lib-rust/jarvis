@@ -1,7 +1,6 @@
 use crate::{
     llm::ToolClient,
     service::weather::{GetCurrentWeather, GetForecast, GetTodayForecast},
-    llm::SlmRequest,
     types::Result,
 };
 use log::trace;
@@ -16,12 +15,9 @@ impl<'a> WeatherAgent<'a> {
         Self { tool_client }
     }
 
-    pub async fn exec(&self, request: &SlmRequest) -> Result<String> {
-        trace!("exec(&self, request: &SlmRequest) -> Result<String>");
-        let function: Function = self
-            .tool_client
-            .get_function(request.get_prompt(), "weather")
-            .await?;
+    pub async fn exec(&self, prompt: &str) -> Result<String> {
+        trace!("exec(&self, prompt: &str) -> Result<String>");
+        let function: Function = self.tool_client.get_function(prompt, "weather").await?;
         function.exec().await
     }
 }

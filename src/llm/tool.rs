@@ -1,13 +1,10 @@
-use std::time::{Duration, Instant};
-
 use crate::error::AppError;
-use crate::llm::{SlmClient, SlmRequest};
 use crate::types::Result;
-use futures::StreamExt;
 use log::{debug, trace};
-use serde::Deserialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::time::{Duration, Instant};
 
 const KEEP_IT_FOREVER: Duration = Duration::from_secs(28440);
 
@@ -36,8 +33,7 @@ impl ToolClient {
             "get_function<T>(&self, prompt: &str, tools: &str) -> Result<T> where T: DeserializeOwned"
         );
         let start = Instant::now();
-        let request = SlmRequest::with_tools(prompt, tools);
-        let result = match self.exec(&request).await {
+        let result = match self.exec(prompt, tools).await {
             Some(tool_code) => serde_json::from_str::<T>(&tool_code)
                 .map_err(|error| AppError::Fatal(error.to_string())),
             None => Err(AppError::Fatal(
@@ -51,17 +47,29 @@ impl ToolClient {
         result
     }
 
-    async fn exec(&self, request: &SlmRequest) -> Option<String> {
-        trace!("exec(&self, request: &SlmRequest) -> Option<String>");
-        debug!("request: {:?}", request);
+    async fn exec(&self, prompt: &str, tools: &str) -> Option<String> {
+        trace!("ToolClient::exec(&self, prompt: &str, tools: &str) -> Option<String>");
+        debug!("prompt: {}", prompt);
+        debug!("tools: {}", tools);
 
-        let slm = SlmClient::for_client(&self.tool_url, &self.http_client);
-        let mut stream = slm.exec(request).await;
-        let mut result = String::new();
-        while let Some(chunk) = stream.next().await {
-            result.push_str(&chunk.ok()?);
+        #[derive(Serialize, Debug)]
+        struct Request<'a> {
+            prompt: &'a str,
+            tools: &'a str,
         }
-        debug!("result: {}", result);
+        let request = Request { prompt, tools };
+
+        let function_call = self
+            .http_client
+            .post(&self.tool_url)
+            .json(&request)
+            .send()
+            .await
+            .ok()?
+            .text()
+            .await
+            .ok()?;
+        debug!("function_call: {}", function_call);
 
         // [{"function":{"name":"hera_read_temperature","arguments":{"zone":"living room"}},"confidence":0.9986770153045654,"confidence_min":0.9816742539405824}]
         // {"function":"read_temperature","zone":"living room"}
@@ -82,7 +90,7 @@ impl ToolClient {
             _confidence_min: f32,
         }
 
-        let value: Vec<Response> = serde_json::from_str(&result).ok()?;
+        let value: Vec<Response> = serde_json::from_str(&function_call).ok()?;
         debug!("value: {:?}", value);
         if let Some(response) = value.get(0) {
             let arguments = response

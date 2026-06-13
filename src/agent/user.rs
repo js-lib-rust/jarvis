@@ -1,12 +1,11 @@
-use log::{debug, trace};
-use serde::Deserialize;
-
-use crate::llm::{SlmRequest, ToolClient};
+use crate::llm::ToolClient;
 use crate::service::Property;
 use crate::service::user::{
-    GetProperty, ListProperties, RemoveProperty, RenameProperty, SetProperty, UpdateProperty
+    GetProperty, ListProperties, RemoveProperty, RenameProperty, SetProperty, UpdateProperty,
 };
 use crate::types::Result;
+use log::{debug, trace};
+use serde::Deserialize;
 
 pub struct UserProfileAgent<'a> {
     tool_client: &'a ToolClient,
@@ -17,19 +16,15 @@ impl<'a> UserProfileAgent<'a> {
         Self { tool_client }
     }
 
-    pub async fn exec(&self, request: &SlmRequest) -> Result<String> {
-        trace!("UserProfileAgent::exec(&self, request: SlmRequest) -> Result<String>");
-        let prompt = request.get_prompt().to_string();
-        debug!("prompt: {prompt}");
+    pub async fn exec(&self, prompt: &str) -> Result<String> {
+        trace!("UserProfileAgent::exec(&self, prompt: &str) -> Result<String>");
+        debug!("prompt: {}", prompt);
 
         if prompt == "Get my username." {
             return Ok(Property::value("username", &self.username()));
         }
 
-        let mut function: Function = self
-            .tool_client
-            .get_function(request.get_prompt(), "user")
-            .await?;
+        let mut function: Function = self.tool_client.get_function(prompt, "user").await?;
         function.exec().await
     }
 

@@ -2,7 +2,6 @@ use crate::llm::ToolClient;
 use crate::service::health::{
     ReadMeasurements, SaveBlood, SaveGlucose, SaveTemperature, SaveWeight,
 };
-use crate::llm::SlmRequest;
 use crate::types::Result;
 use log::trace;
 use serde::Deserialize;
@@ -16,12 +15,9 @@ impl<'a> HealthAgent<'a> {
         Self { tool_client }
     }
 
-    pub async fn exec(&self, request: &SlmRequest) -> Result<String> {
-        trace!("exec(&self, request: &SlmRequest) -> Result<String>");
-        let mut function: Function = self
-            .tool_client
-            .get_function(request.get_prompt(), "health")
-            .await?;
+    pub async fn exec(&self, prompt: &str) -> Result<String> {
+        trace!("HealthAgent::exec(&self, prompt: &str) -> Result<String>");
+        let mut function: Function = self.tool_client.get_function(prompt, "health").await?;
         function.exec().await
     }
 }

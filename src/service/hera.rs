@@ -1,16 +1,14 @@
-use std::{
-    collections::HashMap,
-    net::{Shutdown, SocketAddr, TcpStream},
-    time::Duration,
-};
-
+use crate::{error::AppError, types::Result, util::string};
 use lazy_static::lazy_static;
 use log::{debug, trace};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::net::ToSocketAddrs;
-
-use crate::{error::AppError, llm::SlmRequest, types::Result, util::string};
+use std::{
+    collections::HashMap,
+    net::{Shutdown, SocketAddr, TcpStream},
+    time::Duration,
+};
 
 #[derive(Deserialize, Serialize, Debug)]
 enum DeviceType {
@@ -78,17 +76,18 @@ lazy_static! {
 
 fn device(name: &str) -> Option<&Device> {
     trace!("agent::hera::device(name: &str) -> Option<&Device>");
-    let prompt = format!(
-        r"Find device described by '{}' and return it's id.
-Search in next devices: {}
-Return only the device id. If device cannot be determined return 'none'.",
-        name,
-        ListDevices::new().exec().ok()?
-    );
-    debug!("prompt: {prompt}");
-    let Ok(id) = SlmRequest::new(&prompt).exec() else {
-        return None;
-    };
+    //     let prompt = format!(
+    //         r"Find device described by '{}' and return it's id.
+    // Search in next devices: {}
+    // Return only the device id. If device cannot be determined return 'none'.",
+    //         name,
+    //         ListDevices::new().exec().ok()?
+    //     );
+    //     debug!("prompt: {prompt}");
+    //     let Ok(id) = SlmRequest::new(&prompt).exec() else {
+    //         return None;
+    //     };
+    let id = name;
     debug!("device id: {id}");
     devices.iter().find(|d| d.id == id.to_lowercase().trim())
 }
@@ -205,10 +204,6 @@ lazy_static! {
 pub struct ListDevices {}
 
 impl ListDevices {
-    fn new() -> Self {
-        Self {}
-    }
-
     pub fn exec(&self) -> Result<String> {
         trace!("agent::hera::ListDevices::exec(&self) -> Result<String>");
         Ok(devices

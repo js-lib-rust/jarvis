@@ -1,6 +1,5 @@
-use crate::llm::SlmRequest;
 use crate::types::{ResponseExt, Result, StringStream};
-use crate::{error::AppError, llm::LlmRequest};
+use crate::llm::LlmRequest;
 use log::{debug, trace};
 
 pub struct PrinterAgent {
@@ -19,15 +18,12 @@ impl PrinterAgent {
         }
     }
 
-    pub async fn exec(&self, request: SlmRequest) -> Result<StringStream> {
-        trace!("PrinterAgent::execs(&self, request: SlmRequest) -> StringStream");
-        let Some(system) = request.get_system() else {
-            return Err(AppError::Fatal("missing system".to_string()));
-        };
-        debug!("system: {system}");
+    pub async fn exec(&self, system: &str, prompt: &str) -> Result<StringStream> {
+        trace!("PrinterAgent::exec(&self, system: &str, prompt: &str) -> Result<StringStream>");
+        debug!("system: {}", system);
 
         let system = &format!("{}\n\n{}", Self::INSTRUCTION, system);
-        let request = LlmRequest::from_messages(system, request.get_prompt());
+        let request = LlmRequest::from_messages(system, prompt);
         debug!("request: {:?}", request);
 
         Ok(self
