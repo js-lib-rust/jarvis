@@ -1,14 +1,16 @@
 use crate::error::AppError;
 use crate::llm::RouterResponse;
 use crate::types::Result;
+use bson::DateTime;
 use log::{debug, error, info, trace, warn};
+use mongodb::{Client, Collection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
-use tokio::sync::{Semaphore, mpsc, oneshot};
+use tokio::sync::{OnceCell, Semaphore, mpsc, oneshot};
 use tokio::time::{interval, sleep, timeout};
 
 // retry delay for TCP connection with router service
@@ -16,6 +18,8 @@ const CONNECTION_RETRY_DELAY: Duration = Duration::from_secs(4);
 
 // timeout for a single routing request (covers full TCP round-trip)
 const ROUTING_TIMEOUT: Duration = Duration::from_secs(2);
+
+const MAX_PAYLOAD_LEN: usize = 1000;
 
 /// Messages sent from client to server.
 #[derive(Serialize, Debug)]
@@ -53,7 +57,12 @@ impl TryFrom<TcpResponse> for RouterResponse {
                 debug!("confidence: {}", confidence);
                 debug!("text: {}", text);
                 debug!("processing_time: {}", processing_time);
-                Ok(RouterResponse { text, confidence })
+                Ok(RouterResponse {
+                    estimated_confidence,
+                    confidence,
+                    text,
+                    processing_time,
+                })
             }
 
             TcpResponse::Pong => Err(AppError::Fatal(
@@ -140,13 +149,25 @@ impl RouterClient {
     /// Rejects immediately if another request is already in flight.
     pub async fn get_routing(&self, prompt: &str) -> Result<RouterResponse> {
         trace!("get_routing(&self, prompt: &str) -> Result<RouterResponse>");
+        let start = Instant::now();
 
         let _permit = self
             .get_routing_semaphore
             .try_acquire()
             .map_err(|_| AppError::Fatal("Router is busy".into()))?;
 
-        timeout(ROUTING_TIMEOUT, self.do_routing(prompt)).await?
+        let response = match timeout(ROUTING_TIMEOUT, self.do_routing(prompt)).await {
+            Ok(result) => result?,
+            Err(error) => {
+                error!("Router error: {}", error);
+                return Err(AppError::from(error));
+            }
+        };
+
+        RouterMetrics::new(prompt, &response, start.elapsed().as_secs_f32())
+            .save()
+            .await;
+        Ok(response)
     }
 
     async fn do_routing(&self, prompt: &str) -> Result<RouterResponse> {
@@ -158,14 +179,14 @@ impl RouterClient {
         struct Payload<'a> {
             prompt: &'a str,
         }
-        let request = TcpRequest::Request {
+        let tcp_request = TcpRequest::Request {
             payload: serde_json::to_value(Payload { prompt })?,
         };
 
         // Send the instruction to the background worker
         self.control_channel_sender
             .send(ControlMessage::Send {
-                tcp_request: request,
+                tcp_request,
                 response_channel_sender,
             })
             .await
@@ -291,14 +312,80 @@ impl TcpConnection {
     async fn read_tcp_message(&mut self) -> Result<TcpResponse> {
         trace!("read_tcp_message(&mut self) -> Result<TcpResponse>");
 
-        let mut json_length_buffer = [0u8; 4];
-        self.tcp_reader.read_exact(&mut json_length_buffer).await?;
-        let json_length = u32::from_be_bytes(json_length_buffer) as usize;
+        let mut length_buffer = [0u8; 4];
+        self.tcp_reader.read_exact(&mut length_buffer).await?;
+        let payload_len = u32::from_be_bytes(length_buffer) as usize;
+        debug!("payload_len: {}", payload_len);
 
-        let mut json_buffer = vec![0u8; json_length];
-        self.tcp_reader.read_exact(&mut json_buffer).await?;
+        if payload_len > MAX_PAYLOAD_LEN {
+            let error = format!("router response too large: {}", payload_len);
+            error!("{}", error);
+            return Err(AppError::Fatal(error));
+        }
 
-        let response = serde_json::from_slice(&json_buffer)?;
+        let mut payload = vec![0u8; payload_len];
+        self.tcp_reader.read_exact(&mut payload).await?;
+
+        let response = serde_json::from_slice(&payload)?;
+        debug!("response: {:?}", response);
         Ok(response)
+    }
+}
+
+// --------------------------------------------------------
+// Router Metrics Database
+
+const SERVER: &str = "mongodb://localhost:27017";
+const DATABASE: &str = "jarvis";
+const COLLECTION: &str = "router_metrics";
+
+static MONGO_CLIENT: OnceCell<Client> = OnceCell::const_new();
+static MONGO_COLLECTION: OnceCell<Collection<RouterMetrics>> = OnceCell::const_new();
+
+async fn collection() -> Result<&'static Collection<RouterMetrics<'static>>> {
+    let client = MONGO_CLIENT
+        .get_or_try_init(|| async { Client::with_uri_str(SERVER).await })
+        .await?;
+
+    let collection = MONGO_COLLECTION
+        .get_or_init(|| async {
+            client
+                .database(DATABASE)
+                .collection::<RouterMetrics>(COLLECTION)
+        })
+        .await;
+
+    Ok(collection)
+}
+
+#[derive(Serialize)]
+struct RouterMetrics<'a> {
+    timestamp: DateTime,
+    prompt: &'a str,
+    text: &'a str,
+    estimated_confidence: f32,
+    confidence: f32,
+    processing_time: f32,
+    request_time: f32,
+}
+
+impl<'a> RouterMetrics<'a> {
+    fn new(prompt: &'a str, response: &'a RouterResponse, request_time: f32) -> Self {
+        Self {
+            timestamp: DateTime::now(),
+            prompt: prompt,
+            text: &response.text,
+            estimated_confidence: response.estimated_confidence,
+            confidence: response.confidence,
+            processing_time: response.processing_time,
+            request_time: request_time,
+        }
+    }
+
+    async fn save(&self) {
+        // best effort; is not critic if metrics are lost since they are used for statistics
+        if let Ok(collection) = collection().await {
+            let _ = collection.insert_one(self, None).await;
+        }
     }
 }

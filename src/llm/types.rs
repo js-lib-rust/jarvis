@@ -29,6 +29,8 @@ pub(crate) struct LlmRequest {
 }
 
 impl LlmRequest {
+    const MAX_PROMPT: usize = 400;
+
     pub(crate) fn from_messages(system: &str, user: &str) -> Self {
         let messages = vec![
             LlmMessage::new("system", system),
@@ -49,7 +51,7 @@ impl LlmRequest {
             .rev()
             .find(|m| m.role == "user")
             .map(|m| m.content.as_str())
-            .filter(|&prompt| prompt.len() < 200)
+            .filter(|&prompt| prompt.len() < Self::MAX_PROMPT)
     }
 
     pub(crate) fn is_stream(&self) -> bool {
@@ -158,7 +160,10 @@ impl LlmModels {
     }
 }
 
+#[derive(Serialize, Debug)]
 pub(crate) struct RouterResponse {
-    pub(crate) text: String,
+    pub(crate) estimated_confidence: f32,
     pub(crate) confidence: f32,
+    pub(crate) text: String,
+    pub(crate) processing_time: f32,
 }
