@@ -167,3 +167,9 @@ pub(crate) struct RouterResponse {
     pub(crate) text: String,
     pub(crate) processing_time: f32,
 }
+
+impl RouterResponse {
+    pub(crate) fn is_confident(&self) -> bool {
+        self.confidence > 0.96
+    }
+}
