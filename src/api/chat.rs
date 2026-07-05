@@ -91,8 +91,9 @@ async fn post_chat_completions(
         debug!("text: {}, confidence: {}", routing.text, routing.confidence);
         if routing.is_confident() {
             let mut interpreter = Interpreter::new(&app_state.tool_client);
-            let string_stream = interpreter.eval(&routing.text).await;
-            return Ok(ChatResponse::from(string_stream));
+            if let Some(string_stream) = interpreter.eval(&routing.text).await {
+                return Ok(ChatResponse::from(string_stream));
+            }
         }
     }
 
