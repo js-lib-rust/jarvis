@@ -1,4 +1,5 @@
 use crate::llm::ToolClient;
+use crate::proc::Action;
 use crate::service::health::{
     ReadMeasurements, SaveBlood, SaveGlucose, SaveTemperature, SaveWeight,
 };
@@ -15,9 +16,9 @@ impl<'a> HealthAgent<'a> {
         Self { tool_client }
     }
 
-    pub async fn exec(&self, prompt: &str) -> Result<String> {
-        trace!("HealthAgent::exec(&self, prompt: &str) -> Result<String>");
-        let mut function: Function = self.tool_client.get_function(prompt, "health").await?;
+    pub async fn exec(&self, action: &Action<'a>) -> Result<String> {
+        trace!("HealthAgent::exec(&self, action: &Action<'a>) -> Result<String>");
+        let mut function: Function = self.tool_client.get_function(&action.prompt, action.agent).await?;
         function.exec().await
     }
 }

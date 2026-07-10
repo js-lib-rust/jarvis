@@ -1,6 +1,7 @@
 use crate::llm::ToolClient;
+use crate::proc::Action;
 use crate::service::Property;
-use crate::service::user::{
+use crate::service::user_profile::{
     GetProperty, ListProperties, RemoveProperty, RenameProperty, SetProperty, UpdateProperty,
 };
 use crate::types::Result;
@@ -16,15 +17,16 @@ impl<'a> UserProfileAgent<'a> {
         Self { tool_client }
     }
 
-    pub async fn exec(&self, prompt: &str) -> Result<String> {
-        trace!("UserProfileAgent::exec(&self, prompt: &str) -> Result<String>");
+    pub async fn exec(&self, action: &Action<'a>) -> Result<String> {
+        trace!("UserProfileAgent::exec(&self, action: &Action<'a>) -> Result<String>");
+        let prompt = &action.prompt;
         debug!("prompt: {}", prompt);
 
         if prompt == "Get my username." {
             return Ok(Property::value("username", &self.username()));
         }
 
-        let mut function: Function = self.tool_client.get_function(prompt, "user").await?;
+        let mut function: Function = self.tool_client.get_function(prompt, action.agent).await?;
         function.exec().await
     }
 

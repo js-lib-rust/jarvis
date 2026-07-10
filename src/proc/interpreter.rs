@@ -1,29 +1,17 @@
-use crate::agent::hera::HeraAgent;
+use crate::agent::home_automation::HomeAutomationAgent;
 use crate::agent::printer::PrinterAgent;
 use crate::agent::query::QueryAgent;
-use crate::agent::time::TimeServiceAgent;
-use crate::agent::units::MeasurementUnitAgent;
-use crate::agent::user::UserProfileAgent;
+use crate::agent::time_service::TimeServiceAgent;
+use crate::agent::measure_units::MeasureUnitAgent;
+use crate::agent::user_profile::UserProfileAgent;
 use crate::agent::weather::WeatherAgent;
 use crate::llm::ToolClient;
+use crate::proc::Action;
 use crate::proc::stack::FactsStack;
 use crate::types::StringStream;
 use crate::{agent::health::HealthAgent, proc::app::AppManager};
 use futures::StreamExt;
 use log::{debug, trace};
-use serde::Deserialize;
-
-#[derive(Deserialize, Debug)]
-pub(crate) struct Action<'a> {
-    agent: &'a str,
-    prompt: &'a str,
-}
-
-impl<'a> Action<'a> {
-    fn new(agent: &'a str, prompt: &'a str) -> Self {
-        Self { agent, prompt }
-    }
-}
 
 pub struct Interpreter<'a> {
     tool_client: &'a ToolClient,
@@ -47,13 +35,13 @@ impl<'a> Interpreter<'a> {
         let mut facts_stack = FactsStack::new();
         let mut stream_operations: Vec<StringStream> = Vec::new();
 
-        for action in actions {
-            let prompt = &facts_stack.inject_variables(&action.prompt);
-            debug!("prompt: {}", prompt);
+        for mut action in actions {
+            action.inject_variables(&facts_stack.facts);
+            debug!("prompt: {}", action.prompt);
             if action.agent == "default" {
                 return None;
             }
-            facts_stack.push_prompt(&prompt);
+            facts_stack.push_prompt(&action.prompt);
             // TODO: check if all prompt's variables are resolved
             debug!("facts: {:?}", facts_stack.facts);
 
@@ -64,16 +52,16 @@ impl<'a> Interpreter<'a> {
             // println!("system result: {:?}", result);
 
             let result: Option<String> = match action.agent {
-                "app-manager" => AppManager::new(self.tool_client).exec(prompt).await.ok(),
-                "time-service" => TimeServiceAgent::new().exec(prompt).ok(),
+                "app-manager" => AppManager::new(self.tool_client).exec(&action).await.ok(),
+                "time-service" => TimeServiceAgent::new().exec(&action).ok(),
                 "user-profile" => UserProfileAgent::new(self.tool_client)
-                    .exec(prompt)
+                    .exec(&action)
                     .await
                     .ok(),
-                "measure-units" => MeasurementUnitAgent::new().exec(prompt).ok(),
-                "health" => HealthAgent::new(self.tool_client).exec(prompt).await.ok(),
-                "weather" => WeatherAgent::new(self.tool_client).exec(prompt).await.ok(),
-                "home-automation" => HeraAgent::new(self.tool_client).exec(prompt).await.ok(),
+                "measure-units" => MeasureUnitAgent::new().exec(&action).ok(),
+                "health" => HealthAgent::new(self.tool_client).exec(&action).await.ok(),
+                "weather" => WeatherAgent::new(self.tool_client).exec(&action).await.ok(),
+                "home-automation" => HomeAutomationAgent::new(self.tool_client).exec(&action).await.ok(),
                 _ => None,
             };
             if let Some(response) = result {
@@ -82,6 +70,7 @@ impl<'a> Interpreter<'a> {
             }
 
             let system = facts_stack.context.as_str();
+            let prompt = &action.prompt;
             let stream: Option<StringStream> = match action.agent {
                 "query" => QueryAgent::new().exec(system, prompt).await.ok(),
                 "printer" => PrinterAgent::new().exec(system, prompt).await.ok(),

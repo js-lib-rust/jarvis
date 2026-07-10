@@ -7,10 +7,10 @@ use std::collections::HashMap;
 
 pub(crate) mod health;
 pub(crate) mod measure_unit;
-pub(crate) mod time;
-pub(crate) mod user;
+pub(crate) mod time_service;
+pub(crate) mod user_profile;
 pub(crate) mod weather;
-pub(crate) mod hera;
+pub(crate) mod home_automation;
 
 #[derive(Debug)]
 struct Function<'a> {

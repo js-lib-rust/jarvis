@@ -47,40 +47,6 @@ impl FactsStack {
         }
     }
 
-    pub(in crate::proc) fn inject_variables(&self, prompt: &str) -> String {
-        let mut result = String::new();
-        let mut chars = prompt.chars().peekable();
-
-        while let Some(c) = chars.next() {
-            if c == '$' && chars.peek() == Some(&'{') {
-                chars.next();
-
-                let mut var_name = String::new();
-                while let Some(&next_c) = chars.peek() {
-                    if next_c == '}' {
-                        chars.next();
-                        break;
-                    }
-                    var_name.push(next_c);
-                    chars.next();
-                }
-
-                match self.facts.get(var_name.as_str()) {
-                    Some(value) => result.push_str(&value.to_string().trim_matches('"')),
-                    None => {
-                        result.push_str("${");
-                        result.push_str(&var_name);
-                        result.push_str("}");
-                    }
-                }
-            } else {
-                result.push(c);
-            }
-        }
-
-        result
-    }
-
     pub(in crate::proc) fn get_reasoning_stream(&self) -> StringStream {
         // we need to allocate lines on heap because returned stream takes ownership
         let reasoning_lines: Vec<String> = self

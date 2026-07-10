@@ -1,27 +1,25 @@
 use crate::{
-    llm::ToolClient,
-    service::hera::{
+    llm::ToolClient, proc::Action, service::home_automation::{
         DescribeDevice, GetDeviceActions, GetHeatingState, ListDevices, ReadHumidity, ReadSensors,
         ReadTemperature, RunDeviceDiagnose, RunDiagnose, RunSystemDiagnose, StartHeating,
         StopHeating,
-    },
-    types::Result,
+    }, types::Result,
 };
 use log::trace;
 use serde::Deserialize;
 
-pub struct HeraAgent<'a> {
+pub struct HomeAutomationAgent<'a> {
     tool_client: &'a ToolClient,
 }
 
-impl<'a> HeraAgent<'a> {
+impl<'a> HomeAutomationAgent<'a> {
     pub fn new(tool_client: &'a ToolClient) -> Self {
         Self { tool_client }
     }
 
-    pub async fn exec(&self, prompt: &str) -> Result<String> {
-        trace!("exec(&self, prompt: &str) -> Result<String>");
-        let function: Function = self.tool_client.get_function(prompt, "hera").await?;
+    pub async fn exec(&self, action: &Action<'a>) -> Result<String> {
+        trace!("exec(&self, action: &Action<'a>) -> Result<String>");
+        let function: Function = self.tool_client.get_function(&action.prompt, action.agent).await?;
         function.exec().await
     }
 }

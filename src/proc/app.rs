@@ -2,6 +2,7 @@ use log::{debug, trace};
 use serde::{Deserialize, Serialize};
 
 use crate::llm::ToolClient;
+use crate::proc::Action;
 use crate::types::Result;
 
 #[derive(Serialize)]
@@ -51,9 +52,12 @@ impl<'a> AppManager<'a> {
         Self { tool_client }
     }
 
-    pub(crate) async fn exec(&self, prompt: &str) -> Result<String> {
-        trace!("AppManager::exec(&self, prompt: &str) -> Result<String>");
-        let mut function: Function = self.tool_client.get_function(prompt, "app-manager").await?;
+    pub(crate) async fn exec(&self, action: &Action<'a>) -> Result<String> {
+        trace!("AppManager::exec(&self, action: &Action<'a>) -> Result<String>");
+        let mut function: Function = self
+            .tool_client
+            .get_function(&action.prompt, action.agent)
+            .await?;
         function.exec().await
     }
 }
