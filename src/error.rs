@@ -10,7 +10,10 @@ pub enum AppError {
     Io(#[from] std::io::Error),
 
     #[error("JSON Serde: {0}")]
-    Serde(#[from] serde_json::Error),
+    SerdeJson(#[from] serde_json::Error),
+
+    #[error("YAML Serde: {0}")]
+    SerdeYaml(#[from] serde_yaml::Error),
 
     #[error("Reqwest: {0}")]
     Reqwest(#[from] reqwest::Error),

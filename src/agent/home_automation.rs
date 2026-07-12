@@ -1,9 +1,12 @@
 use crate::{
-    llm::ToolClient, proc::Action, service::home_automation::{
+    llm::ToolClient,
+    proc::Action,
+    service::home_automation::{
         DescribeDevice, GetDeviceActions, GetHeatingState, ListDevices, ReadHumidity, ReadSensors,
         ReadTemperature, RunDeviceDiagnose, RunDiagnose, RunSystemDiagnose, StartHeating,
         StopHeating,
-    }, types::Result,
+    },
+    types::Result,
 };
 use log::trace;
 use serde::Deserialize;
@@ -18,8 +21,11 @@ impl<'a> HomeAutomationAgent<'a> {
     }
 
     pub async fn exec(&self, action: &Action<'a>) -> Result<String> {
-        trace!("exec(&self, action: &Action<'a>) -> Result<String>");
-        let function: Function = self.tool_client.get_function(&action.prompt, action.agent).await?;
+        trace!("HomeAutomationAgent::exec(&self, action: &Action<'a>) -> Result<String>");
+        let function: Function = self
+            .tool_client
+            .get_function(&action.prompt, action.agent)
+            .await?;
         function.exec().await
     }
 }

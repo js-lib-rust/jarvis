@@ -7,6 +7,14 @@ pub(crate) struct Args {
     #[arg(
         short,
         long,
+        default_value = "config.yml",
+        help = "App config file path"
+    )]
+    pub(crate) config_file: String,
+
+    #[arg(
+        short,
+        long,
         default_value = "off",
         help = "Logging level: off, error, warn, info, debug, trace"
     )]

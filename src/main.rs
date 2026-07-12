@@ -1,6 +1,7 @@
 mod agent;
 mod api;
 mod args;
+mod config;
 mod error;
 mod llm;
 mod logger;
@@ -10,6 +11,7 @@ mod types;
 mod util;
 
 use crate::args::Args;
+use crate::config::Config;
 use crate::types::{AppState, Result};
 use log::{debug, trace};
 use std::net::SocketAddr;
@@ -20,8 +22,10 @@ async fn main() -> Result<()> {
     logger::init(&args.log_level, &args.log_file);
     trace!("main() -> Result<()>");
 
-    let app_state =
-        AppState::create(&args.router_addr, &args.tool_url, &args.model_url).await?;
+    Config::load(&args.config_file)?;
+    debug!("config: {:?}", Config::get());
+
+    let app_state = AppState::create(&args.router_addr, &args.tool_url, &args.model_url).await?;
     debug!("app_state: {:?}", app_state);
 
     let socket_addr = SocketAddr::from((args.ip_addr, args.port));

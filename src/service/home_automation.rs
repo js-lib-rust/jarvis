@@ -32,7 +32,7 @@ impl Device {
     }
 
     fn _json(&self) -> Result<String> {
-        serde_json::to_string(self).map_err(|err| AppError::Serde(err))
+        serde_json::to_string(self).map_err(|err| AppError::SerdeJson(err))
     }
 }
 
@@ -540,7 +540,7 @@ impl DiagnoseReport {
     }
 
     fn json(&self) -> Result<String> {
-        serde_json::to_string(self).map_err(|err| AppError::Serde(err))
+        serde_json::to_string(self).map_err(|err| AppError::SerdeJson(err))
     }
 }
 

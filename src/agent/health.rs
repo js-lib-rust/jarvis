@@ -18,7 +18,10 @@ impl<'a> HealthAgent<'a> {
 
     pub async fn exec(&self, action: &Action<'a>) -> Result<String> {
         trace!("HealthAgent::exec(&self, action: &Action<'a>) -> Result<String>");
-        let mut function: Function = self.tool_client.get_function(&action.prompt, action.agent).await?;
+        let mut function: Function = self
+            .tool_client
+            .get_function(&action.prompt, action.agent)
+            .await?;
         function.exec().await
     }
 }

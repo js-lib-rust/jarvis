@@ -1,5 +1,8 @@
 use crate::{
-    llm::ToolClient, proc::Action, service::weather::{GetCurrentWeather, GetForecast, GetTodayForecast}, types::Result,
+    llm::ToolClient,
+    proc::Action,
+    service::weather::{GetCurrentWeather, GetForecast, GetTodayForecast},
+    types::Result,
 };
 use log::trace;
 use serde::Deserialize;
@@ -15,7 +18,10 @@ impl<'a> WeatherAgent<'a> {
 
     pub async fn exec(&self, action: &Action<'a>) -> Result<String> {
         trace!("exec(&self, action: &Action<'a>) -> Result<String>");
-        let function: Function = self.tool_client.get_function(&action.prompt, action.agent).await?;
+        let function: Function = self
+            .tool_client
+            .get_function(&action.prompt, action.agent)
+            .await?;
         function.exec().await
     }
 }

@@ -1,3 +1,4 @@
+use crate::config::Config;
 use crate::llm::ToolClient;
 use crate::proc::Action;
 use crate::service::Property;
@@ -5,7 +6,7 @@ use crate::service::user_profile::{
     GetProperty, ListProperties, RemoveProperty, RenameProperty, SetProperty, UpdateProperty,
 };
 use crate::types::Result;
-use log::{debug, trace};
+use log::trace;
 use serde::Deserialize;
 
 pub struct UserProfileAgent<'a> {
@@ -19,25 +20,35 @@ impl<'a> UserProfileAgent<'a> {
 
     pub async fn exec(&self, action: &Action<'a>) -> Result<String> {
         trace!("UserProfileAgent::exec(&self, action: &Action<'a>) -> Result<String>");
-        let prompt = &action.prompt;
-        debug!("prompt: {}", prompt);
-
-        if prompt == "Get my username." {
-            return Ok(Property::value("username", &self.username()));
-        }
-
-        let mut function: Function = self.tool_client.get_function(prompt, action.agent).await?;
+        let mut function: Function = self
+            .tool_client
+            .get_function(&action.prompt, action.agent)
+            .await?;
         function.exec().await
     }
+}
 
-    fn username(&self) -> String {
-        String::from("Rotaru Iulian")
+#[derive(Deserialize)]
+pub struct GetUsername {
+    user_id: Option<String>,
+}
+
+impl GetUsername {
+    pub async fn exec(&self) -> Result<String> {
+        trace!("GetUsername::exec(&self) -> Result<String>");
+        let user_id = match &self.user_id {
+            Some(user_id) => user_id,
+            None => &Config::get().username,
+        };
+        Ok(Property::value("username", user_id))
     }
 }
 
 #[derive(Deserialize)]
 #[serde(tag = "function")]
 enum Function {
+    #[serde(rename = "get_username")]
+    GetUsername(GetUsername),
     #[serde(rename = "set_property")]
     SetProperty(SetProperty),
     #[serde(rename = "update_property")]
@@ -55,6 +66,7 @@ enum Function {
 impl Function {
     async fn exec(&mut self) -> Result<String> {
         match self {
+            Function::GetUsername(call) => call.exec().await,
             Function::SetProperty(call) => call.exec().await,
             Function::UpdateProperty(call) => call.exec().await,
             Function::RenameProperty(call) => call.exec().await,
